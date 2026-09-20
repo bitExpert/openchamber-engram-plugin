@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Engram</title>
+    <style>
+      html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+      #root { height: 100%; display: flex; flex-direction: column; }
+      .toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--ok-3, rgba(128,128,128,0.25)); }
+      .content { flex: 1; overflow: auto; padding: 10px; }
+      .row { display: flex; gap: 8px; align-items: center; }
+      .detail pre { white-space: pre-wrap; word-break: break-word; }
+      .note { font-size: 12px; color: var(--ok-2, #888); padding: 6px 0; }
+      .actions { display: flex; gap: 6px; padding-bottom: 8px; }
+      h3 { margin: 4px 0 8px; }
+      .hidden { display: none; }
+      .content :is(p, ul, ol, pre, blockquote, table) { margin: 6px 0; }
+      .content code { font-family: ui-monospace, monospace; font-size: 0.875em; background: var(--ok-3, rgba(128,128,128,0.18)); border-radius: 4px; padding: 0 4px; }
+      .content pre { overflow-x: auto; }
+      .content pre code { background: none; padding: 0; }
+      .content table { border-collapse: collapse; width: 100%; }
+      .content :is(th, td) { border: 1px solid var(--ok-3, rgba(128,128,128,0.3)); padding: 4px 8px; text-align: left; }
+      .content blockquote { border-left: 3px solid var(--ok-3, rgba(128,128,128,0.4)); margin-left: 0; padding-left: 10px; color: var(--ok-2, #888); }
+      .content img { max-width: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="main.js"></script>
+  </body>
+</html>

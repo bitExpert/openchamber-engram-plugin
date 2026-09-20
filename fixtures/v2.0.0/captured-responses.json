@@ -1,0 +1,36 @@
+{
+  "search": {
+    "type": "text",
+    "text": "{\"project\":\"fixture-proj\",\"project_path\":\"\",\"project_source\":\"explicit_override\",\"result\":\"Found 3 memories.\",\"results\":[{\"id\":1,\"pinned\":false,\"preview\":\"Switched from sessions to JWT, set httpOnly+secure cookies\",\"project\":\"fixture-proj\",\"review_after\":\"2027-03-20 07:09:27\",\"scope\":\"project\",\"state\":\"active\",\"sync_id\":\"obs-3a03564edce67b0f\",\"title\":\"Fixture: JWT auth middleware decision\",\"truncated\":false,\"type\":\"decision\"},{\"id\":3,\"pinned\":false,\"preview\":\"Playwright with workers=4, snapshot dir\",\"project\":\"fixture-proj\",\"scope\":\"project\",\"state\":\"active\",\"sync_id\":\"obs-15e86daae8b6362b\",\"title\":\"Fixture: E2E test setup\",\"truncated\":false,\"type\":\"pattern\"},{\"id\":2,\"pinned\":false,\"preview\":\"Fixed N+1 in user list via eager loading\",\"project\":\"fixture-proj\",\"scope\":\"project\",\"state\":\"active\",\"sync_id\":\"obs-c163ca687c76cc03\",\"title\":\"Fixture: N+1 query bugfix\",\"truncated\":false,\"type\":\"bugfix\"}]}"
+  },
+  "get_observation": {
+    "type": "text",
+    "text": "{\"project\":\"fixture-proj\",\"project_path\":\"\",\"project_source\":\"process_override\",\"result\":\"#1 [decision] Fixture: JWT auth middleware decision\\nSwitched from sessions to JWT, set httpOnly+secure cookies\\nSession: manual-save-fixture-proj\\nProject: fixture-proj\\nScope: project\\nDuplicates: 1\\nRevisions: 1\\nCreated: 2026-09-20 09:09:27\"}"
+  },
+  "context": {
+    "type": "text",
+    "text": "{\"project\":\"fixture-proj\",\"project_path\":\"\",\"project_source\":\"explicit_override\",\"result\":\"## Memory from Previous Sessions\\n\\n### Recent Sessions\\n- **fixture-proj** (2026-09-20 09:09:27) [3 observations]\\n\\n### Recent Observations\\n- [pattern] **Fixture: E2E test setup**\\n- [bugfix] **Fixture: N+1 query bugfix**\\n- [decision] **Fixture: JWT auth middleware decision**\\n\\n\\n---\\nMemory stats: 1 sessions, 3 observations across projects: fixture-proj\"}"
+  },
+  "list_projects": {
+    "type": "text",
+    "text": "{\"count\":1,\"projects\":[{\"name\":\"fixture-proj\",\"observation_count\":3,\"session_count\":1,\"prompt_count\":0,\"directories\":[\"/tmp/opencode\"]}]}"
+  },
+  "live_host_verification": {
+    "covered": "2026-09-20",
+    "host": "OpenChamber 1.24.2 (nodenv), daemon 127.0.0.1:3000",
+    "engram": "engram 2.0.0 (system PATH)",
+    "install": "POST /api/guests {path} -> guest id engram-memory, service capability granted via PUT /capabilities {granted:[service]}",
+    "service": "status stopped->ready via health poll; serviceRequest HOSTED, body passthrough",
+    "connect": "resolved executable on service PATH=engram 2.0.0; project openchamber-engram via dir_basename; contextId returned",
+    "recent": "mem_context {project, max_bytes:16384, compact:true} -> document md, envelopeProject",
+    "search_broad": "mem_search {query, project, limit(<=20), response_format:compact, match_mode:any} -> hits[{id,title,type,preview,truncated,scope}]",
+    "getmemory_same_project": "mem_get_observation {id} -> {id,title,markdown,meta}; markdown includes Project line",
+    "getmemory_cross_project": "BUG FOUND+FIXED: projectOfDetail scanned raw envelope JSON (escaped \n) -> guard never fired; fixed to parse envelope result first. Now id 567 (06-odoo) bound to openchamber-engram -> {ok:false, code:project-mismatch}",
+    "guards": {
+      "empty-query": "empty-query",
+      "no-context": "context idle eviction 60s verified",
+      "bad-bearer": "rejected",
+      "project-mismatch": "verified"
+    }
+  }
+}

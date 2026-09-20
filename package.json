@@ -1,0 +1,46 @@
+{
+  "name": "openchamber-engram",
+  "description": "Read-only browser for Engram memories about the active OpenChamber project.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bundle:panel": "openchamber-guest-bundle panel/main.ts panel/main.js",
+    "bundle:service": "openchamber-guest-bundle --node service/main.ts service/main.js",
+    "bundle": "bun run bundle:panel && bun run bundle:service"
+  },
+  "devDependencies": {
+    "@openchamber/sdk": "1.24.2",
+    "@types/markdown-it": "^14.2.0",
+    "@types/node": "^26.6.2",
+    "typescript": "^5.6.0"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": {
+      "openchamber": ">=1.22.0"
+    },
+    "contributes": {
+      "panel": {
+        "id": "engram-memory",
+        "name": "Engram Memory Viewer",
+        "icon": "brain",
+        "entry": "panel/index.html"
+      },
+      "page": true,
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host",
+        "permissions": {
+          "exec": [
+            "engram"
+          ]
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "dompurify": "^3.4.15",
+    "markdown-it": "^15.0.2"
+  }
+}
