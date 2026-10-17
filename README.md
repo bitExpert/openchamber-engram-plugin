@@ -15,7 +15,7 @@ A read-only OpenChamber extension that browses and searches [Engram](https://git
 
 ## Requirements
 
-- **OpenChamber 1.x** — `>=1.22.0`, verified on 1.24.2. OpenChamber 2 is not supported.
+- **OpenChamber 2.x** — `>=2.3.0`, built with `@openchamber/sdk@2.3.3` (wire API v1 compatible back to 1.22.0). Remote markdown images in observations render as links (opened in your browser) due to OpenChamber 2.0.4+ network sandboxing.
 - **Engram `>=2.0.0`** — the `engram` executable must be on `PATH` (extension checks the version; older versions get an explicit unsupported-version state).
 
 ## Install
@@ -76,6 +76,7 @@ All replies are `{ ok: true, ... }` on success or `{ ok: false, code, message }`
 - Read operations are an allowlist enforced in the service (`mem_current_project`, `mem_list_projects`, `mem_context`, `mem_search`, `mem_get_observation`, `mem_timeline`, `mem_stats`). Read-only MCP calls make no durable writes to the Engram store.
 - Ownership of a `mem_get_observation` result is taken from the `Project:` line in the result text — never the process envelope — so you only ever see memories from your active project.
 - As with any OpenChamber service, there is no sandbox: the allowed service runs with the user's full access (the grant card says so).
+- **Enterprise mode:** in enterprise environments that restrict extension installations, extensions carrying a `service` may only be installed from admin-listed git repositories. The panel does not request `network` or `origins` permissions.
 
 ## Repository layout
 

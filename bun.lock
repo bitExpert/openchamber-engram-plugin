@@ -4,11 +4,11 @@
     "": {
       "name": "openchamber-engram",
       "dependencies": {
-        "dompurify": "^3.4.15",
+        "dompurify": "3.4.17",
         "markdown-it": "^15.0.2",
       },
       "devDependencies": {
-        "@openchamber/sdk": "1.24.2",
+        "@openchamber/sdk": "2.3.3",
         "@types/markdown-it": "^14.2.0",
         "@types/node": "^26.6.2",
         "typescript": "^5.6.0",
@@ -16,7 +16,7 @@
     },
   },
   "packages": {
-    "@openchamber/sdk": ["@openchamber/sdk@1.24.2", "", { "dependencies": { "zod": "^4.3.6" }, "bin": { "openchamber-guest-bundle": "scripts/bundle-guest.ts" } }, "sha512-UgzW6PUOUb3MUehEbb/fA64pW/3D9kTr7k18a/24ECnQ/OkRyle09wj+pXGX/IiKxYeJCnv0Y3G27R6oZP9PjQ=="],
+    "@openchamber/sdk": ["@openchamber/sdk@2.3.3", "", { "dependencies": { "zod": "^4.3.6" }, "bin": { "openchamber-guest-bundle": "scripts/bundle-guest.ts" } }, "sha512-Pvaq6BuTE/kZxxmJ9IKcXHdQZFpR+6Ojsa8r5WjBPIuV+BCuLeJzXpZw9pFACF/N3ogZGE/4Kv6QRErYSw2AyA=="],
 
     "@types/linkify-it": ["@types/linkify-it@5.0.0", "", {}, "sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q=="],
 
@@ -30,7 +30,7 @@
 
     "argparse": ["argparse@3.0.2", "", {}, "sha512-mFdDM6WqWKraGLsVb+C9CahPnzTXOefAOLq3jYcca2YZ8bEWpr++Tzj+zSaKW9+X9L5uSxcm1AZ3Y6aZJ09OhQ=="],
 
-    "dompurify": ["dompurify@3.4.15", "", { "optionalDependencies": { "@types/trusted-types": "^2.0.7" } }, "sha512-EUBjM+B+lkDE41iE82DDSCfkoPGfXx8IxFxPMjNzm/Uk4xDet77rTN9wqlxlVg71kK7XGuUMv6wUxJUwwv+Xyw=="],
+    "dompurify": ["dompurify@3.4.17", "", { "optionalDependencies": { "@types/trusted-types": "^2.0.7" } }, "sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w=="],
 
     "entities": ["entities@8.1.0", "", {}, "sha512-kxL7msIffSuh9aaFAMD7rxAIuTRMAHMeBtgHW2yUdWw732ZNh4MehkF2gdjvtdmikkaIP9bFDDJOPlsvm7avrA=="],
 

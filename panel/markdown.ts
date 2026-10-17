@@ -16,6 +16,20 @@ md.validateLink = (url: string): boolean => {
   }
 };
 
+// OpenChamber >= 2.0.4 serves extension pages under a policy that keeps them
+// off the network, so a remote `<img>` never loads. Render images as links
+// instead; `renderMarkdownInto` routes the click through `host.openUrl`.
+const escapeHtml = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+md.renderer.rules.image = (tokens, idx) => {
+  const token = tokens[idx];
+  const src = String(token.attrGet('src') ?? '');
+  const alt = (token.children ?? []).map((child) => child.content).join('').trim();
+  const label = alt || src;
+  return `<a href="${escapeHtml(src)}" title="${escapeHtml(alt)}">image: ${escapeHtml(label)}</a>`;
+};
+
 const ALLOWED_TAGS = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'p', 'br', 'hr',
@@ -23,19 +37,15 @@ const ALLOWED_TAGS = [
   'blockquote',
   'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
   'em', 'strong', 'del', 'ins', 'code', 'pre',
-  'a', 'img', 'span',
+  'a', 'span',
 ];
 
-const ALLOWED_ATTR = ['href', 'title', 'alt', 'src'];
+const ALLOWED_ATTR = ['href', 'title'];
 
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node instanceof HTMLAnchorElement) {
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');
-  }
-  if (node instanceof HTMLImageElement) {
-    node.setAttribute('loading', 'lazy');
-    node.setAttribute('referrerpolicy', 'no-referrer');
   }
 });
 
