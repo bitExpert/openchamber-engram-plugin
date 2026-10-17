@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file, in reverse chronological order by release.
 
+## 0.3.0
+
+### Added
+
+- Nothing.
+
+### Deprecated
+
+- Nothing.
+
+### Removed
+
+- Nothing.
+
+### Fixed
+
+- [#3](https://github.com/bitExpert/openchamber-engram-plugin/pull/3) Fix extension versioning
+
 ## 0.2.0
 
 ### Added
