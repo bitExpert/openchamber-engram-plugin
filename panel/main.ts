@@ -1,4 +1,4 @@
-import { connectHost, type GuestRequestMethod } from '@openchamber/sdk';
+import { connectHost, type GuestRequestMethod, type JsonValue } from '@openchamber/sdk';
 import { applyHostReady, mountBadge, mountButton, mountList, mountSearchField, mountSelect, mountSeparator, type Tone } from '@openchamber/sdk/ui';
 import { renderMarkdownInto } from './markdown';
 
@@ -12,10 +12,29 @@ interface Config {
   projectOverride?: string | null;
 }
 
+type ProjectStatus = 'resolved' | 'ambiguous' | 'unknown';
+
+interface ConnectResult {
+  ok: boolean;
+  code?: string;
+  contextId?: string;
+  project?: string;
+  projectSource?: string;
+  projectPath?: string;
+  projectStatus?: ProjectStatus;
+  errorHint?: string;
+  candidates?: string[];
+  version?: string;
+  required?: string;
+}
+
 interface ConnectState {
   contextId: string;
   project: string;
   projectSource: string;
+  projectPath: string;
+  projectStatus: ProjectStatus;
+  errorHint: string;
   candidates: string[];
   version: string;
 }
@@ -97,7 +116,7 @@ async function connect(): Promise<void> {
   try {
     const dir = directory ?? processDirectory();
     const revision = JSON.stringify(config);
-    const result = await callService<{ ok: boolean; code?: string; contextId?: string; project?: string; projectSource?: string; candidates?: string[]; version?: string; required?: string }>('POST', '/v1/connect', { config, configRevision: revision, directory: dir });
+    const result = await callService<ConnectResult>('POST', '/v1/connect', { config, configRevision: revision, directory: dir });
     setVersion(result.version);
     if (!result.ok) {
       setBadge(result.code === 'unsupported-engram' ? 'Unsupported Engram' : 'Failed', 'error');
@@ -107,11 +126,25 @@ async function connect(): Promise<void> {
       renderSetup();
       return;
     }
-    state = result as ConnectState;
-    currentAllContextId = result.contextId ?? null;
-    setBadge('Ready', 'success');
+    state = {
+      contextId: result.contextId ?? '',
+      project: result.project ?? '',
+      projectSource: result.projectSource ?? '',
+      projectPath: result.projectPath ?? '',
+      projectStatus: result.projectStatus ?? 'unknown',
+      errorHint: result.errorHint ?? '',
+      candidates: result.candidates ?? [],
+      version: result.version ?? '',
+    };
+    currentAllContextId = state.contextId || null;
     statusNote.textContent = '';
-    renderRecent();
+    if (state.projectStatus === 'resolved') {
+      setBadge('Ready', 'success');
+      void renderRecent();
+    } else {
+      setBadge(state.projectStatus === 'ambiguous' ? 'Pick project' : 'No project', 'warning');
+      renderProjectGate();
+    }
   } catch (error) {
     setBadge('Unavailable', 'error');
     statusNote.textContent = error instanceof Error ? error.message : String(error);
@@ -126,6 +159,7 @@ function processDirectory(): string {
 async function renderRecent(): Promise<void> {
   if (!state) return;
   viewRoot.textContent = '';
+  renderProjectLine(viewRoot);
   const heading = el('h3', viewRoot);
   heading.textContent = 'Recent memories';
   const doc = el('div', viewRoot);
@@ -139,6 +173,7 @@ async function renderRecent(): Promise<void> {
 
 async function doSearch(): Promise<void> {
   if (!state) return;
+  if (state.projectStatus !== 'resolved') { renderProjectGate(); return; }
   if (!query.trim()) { void renderRecent(); return; }
   viewRoot.textContent = '';
   const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>('POST', '/v1/search', {
@@ -177,7 +212,7 @@ async function doSearch(): Promise<void> {
 }
 
 async function showDetail(id: number): Promise<void> {
-  if (!state) return;
+  if (!state || state.projectStatus !== 'resolved') return;
   viewRoot.textContent = '';
   const back = el('div', viewRoot, 'actions');
   mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { if (query.trim()) void doSearch(); else void renderRecent(); } });
@@ -206,6 +241,81 @@ function renderSetup(): void {
   heading.textContent = 'Engram setup';
   const note = el('p', viewRoot, 'note');
   note.textContent = 'Open the extension settings to change the executable, data directory, and project mapping.';
+}
+
+function sourceLabel(source: string): string {
+  switch (source) {
+    case 'process_override':
+    case 'explicit_override': return 'explicit override';
+    case 'git_remote': return 'detected via git remote';
+    case 'dir_basename': return 'detected from directory name';
+    case 'session': return 'from session';
+    case 'ambiguous': return 'needs a choice';
+    case 'all_projects': return 'all projects';
+    case '': return 'undetected';
+    default: return source;
+  }
+}
+
+function renderProjectLine(container: HTMLElement): void {
+  if (!state || !state.project) return;
+  const line = el('div', container, 'project-line');
+  const label = el('span', line, 'project-label');
+  label.textContent = `Project: ${state.project}`;
+  const source = el('span', line, 'project-source');
+  source.textContent = sourceLabel(state.projectSource);
+  if (config.projectOverride) {
+    mountButton(line, { label: 'Clear override', variant: 'ghost', size: 'xs', onClick: () => { void applyProjectOverride(null); } });
+  }
+}
+
+function renderProjectGate(): void {
+  if (!state) return;
+  viewRoot.textContent = '';
+  const heading = el('h3', viewRoot);
+  heading.textContent = state.projectStatus === 'ambiguous' ? 'Choose a project' : 'Project not detected';
+  const note = el('p', viewRoot, 'note');
+  note.textContent = state.errorHint
+    || (state.projectStatus === 'ambiguous'
+      ? 'Engram matched more than one project for this workspace. Pick the one to browse.'
+      : 'Engram could not detect a project for this workspace. Pick one to browse.');
+  if (state.projectPath) {
+    const path = el('p', viewRoot, 'note');
+    path.textContent = `Detected path: ${state.projectPath}`;
+  }
+  const candidates = state.candidates;
+  if (!candidates.length) {
+    const hint = el('p', viewRoot, 'note');
+    hint.textContent = 'No projects are known to Engram yet. Open the extension settings to set a project mapping.';
+    return;
+  }
+  const row = el('div', viewRoot, 'project-pick');
+  let chosen = config.projectOverride && candidates.includes(config.projectOverride) ? config.projectOverride : '';
+  mountSelect(row, {
+    value: chosen || null,
+    placeholder: 'Select a project…',
+    searchable: candidates.length > 8,
+    options: candidates.map((name) => ({ id: name, label: name })),
+    onChange: (id) => { chosen = id; },
+  });
+  mountButton(row, {
+    label: 'Use project',
+    size: 'sm',
+    onClick: () => {
+      if (chosen) void applyProjectOverride(chosen);
+      else statusNote.textContent = 'Pick a project first.';
+    },
+  });
+}
+
+async function applyProjectOverride(name: string | null): Promise<void> {
+  config = { ...config, projectOverride: name };
+  try {
+    await host.storage.set(STORAGE_KEY, config as unknown as JsonValue);
+  } catch {
+    // Persisting is best-effort; the in-memory config still applies for this session.
+  }
+  await connect();
 }
 
 const searchFieldWrap = el('label', toolbarMain, 'oc-sdk oc-sdk-field');

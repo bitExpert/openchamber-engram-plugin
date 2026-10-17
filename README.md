@@ -10,7 +10,7 @@ A read-only OpenChamber extension that browses and searches [Engram](https://git
 - **Search** — project-scoped `mem_search` with a match toggle (all/any) and a result limit (10/20).
 - **Detail** — full observation (`mem_get_observation`) rendered as sanitized HTML; Markdown headings, lists, tables, code, blockquotes, links, images.
 - **Copy / Insert** — copy the raw observation or insert it into the chat composer.
-- **Project bound** — ownership is enforced service-side from the observation's `Project:` line; cross-project memories return a `project-mismatch` error.
+- **Project bound** — the active project is resolved via `mem_current_project` (git remote, `.engram` config, or an explicit override) and shown at the top of the view; queries are project-scoped. When Engram cannot decide (multiple projects match, or a git/history conflict) the panel offers a project picker instead of guessing. Ownership is enforced service-side from the observation's `Project:` line; cross-project memories return a `project-mismatch` error.
 - **Version in the title bar** — the panel header shows the detected Engram version (`v3.4.0`); the extension requires Engram `>=3.4.0`.
 - **Read-only** — only read tools are exposed; nothing is ever written to the Engram store.
 
@@ -52,9 +52,19 @@ Guest storage key `config/v1` (set from the extension settings or panel setup sc
 | ----------------- | ---------- | --------------------------------------- |
 | `executable`      | `engram`   | Path to the Engram binary               |
 | `dataDir`         | *(unset)*  | Sets `ENGRAM_DATA_DIR` for the service  |
-| `projectOverride` | *(unset)*  | Sets `ENGRAM_PROJECT` for the service   |
+| `projectOverride` | *(unset)*  | Sets `ENGRAM_PROJECT` for the service (forces a project) |
 
 The Engram child is always spawned with `mcp --tools=agent,admin` so read-only admin tools (`mem_timeline`, `mem_stats`) are discoverable; every other tool call is rejected by the service.
+
+### Project detection
+
+The active project is whatever `mem_current_project` reports for the panel's working directory — normally the git remote, or the directory name when there is no repository. `/v1/connect` returns a `projectStatus`:
+
+- `resolved` — a project was detected; queries run against it.
+- `ambiguous` — multiple projects match the directory (Engram returns `available_projects` and an `errorHint`); the panel shows a picker.
+- `unknown` — nothing was detected; the panel shows a picker fed by `mem_list_projects`.
+
+Picking a project writes `projectOverride`, which forces `ENGRAM_PROJECT` for the service. The project line at the top of the view shows the active project and how it was chosen, with a **Clear override** action to return to auto-detection.
 
 ## Service API
 
@@ -62,7 +72,7 @@ Loopback HTTP service, authenticated with `Authorization: Bearer <OPENCHAMBER_SE
 
 | Route            | Purpose                                   |
 | ---------------- | ----------------------------------------- |
-| `/v1/connect`    | Spawn Engram, version check, project info |
+| `/v1/connect`    | Spawn Engram, version check, resolve project (`project`, `projectStatus`, `projectPath`, `candidates`, `version`) |
 | `/v1/recent`     | Display-only `mem_context` document       |
 | `/v1/search`     | Project-scoped `mem_search` hits          |
 | `/v1/getMemory`  | Full observation Markdown for an id       |

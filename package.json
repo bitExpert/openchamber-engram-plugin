@@ -1,7 +1,7 @@
 {
   "name": "openchamber-engram",
   "description": "Read-only browser for Engram memories about the active OpenChamber project.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {

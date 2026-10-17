@@ -97,7 +97,7 @@ async function initializeMcp(ctx: Context): Promise<void> {
   await sendMcp(ctx, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'openchamber-engram', version: '0.3.0' },
+    clientInfo: { name: 'openchamber-engram', version: '0.4.0' },
   });
   await notify(ctx, 'notifications/initialized');
   const tools = await sendMcp(ctx, 'tools/list', {});
@@ -106,12 +106,24 @@ async function initializeMcp(ctx: Context): Promise<void> {
   if (missing.length) throw new Error(`unsupported-engram`);
 }
 
-function contextId(directory: string, configRevision: string): string {
-  return createHash('sha1').update(`${directory}\0${configRevision}`).digest('hex').slice(0, 16);
+function contextId(directory: string, configKey: string): string {
+  return createHash('sha1').update(`${directory}\0${configKey}`).digest('hex').slice(0, 16);
+}
+
+// Every field that changes how the Engram child is spawned must appear here, so a
+// changed project mapping (or executable / data dir) gets its own child process.
+// The previous expression relied on `??` binding looser than `+`, which dropped
+// dataDir/projectOverride whenever an executable was configured.
+function spawnKey(config: { executable?: string; dataDir?: string | null; projectOverride?: string | null }): string {
+  return JSON.stringify({
+    executable: config.executable ?? 'engram',
+    dataDir: config.dataDir ?? null,
+    projectOverride: config.projectOverride ?? null,
+  });
 }
 
 function spawnContext(config: { executable?: string; dataDir?: string | null; projectOverride?: string | null }, directory: string): Promise<Context> {
-  const id = contextId(directory, config.executable ?? '' + (config.dataDir ?? '') + (config.projectOverride ?? ''));
+  const id = contextId(directory, spawnKey(config));
   if (contexts.size >= MAX_CONTEXTS && !contexts.has(id)) {
     return Promise.reject(new Error('context-limit'));
   }
@@ -238,7 +250,6 @@ const server = http.createServer(async (req, res) => {
     switch (url.pathname) {
       case '/v1/connect': {
         const config = (body.config ?? {}) as { executable?: string; dataDir?: string | null; projectOverride?: string | null };
-        const configRevision = String(body.configRevision ?? 'default');
         const directory = String(body.directory ?? process.cwd());
         const executable = config.executable ?? 'engram';
         const versionOut = await new Promise<string>((resolve, reject) => {
@@ -258,25 +269,43 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         const ctx = await spawnContext(config, directory);
-        const cur = await toolCall(ctx, 'mem_current_project', {});
+        const cur = await toolCall(ctx, 'mem_current_project', { directory });
         let project = '';
         let projectSource = '';
+        let projectPath = '';
+        let errorHint = '';
         let candidates: string[] = [];
         if (cur.text) {
           const { envelope } = parseEnvelope(cur.text);
           project = String(envelope?.project ?? '');
           projectSource = String(envelope?.project_source ?? '');
+          projectPath = String(envelope?.project_path ?? '');
+          errorHint = String(envelope?.error_hint ?? '');
           candidates = Array.isArray(envelope?.available_projects) ? (envelope.available_projects as string[]) : [];
         }
-        if (!project) {
+        if (!project && !candidates.length) {
           const pl = await toolCall(ctx, 'mem_list_projects', {});
           if (pl.text) {
             const { envelope } = parseEnvelope(pl.text);
             candidates = (envelope?.projects as { name: string }[] | undefined)?.map((p) => p.name) ?? candidates;
           }
         }
+        // `mem_current_project` never errors on ambiguity: it returns project "" with
+        // project_source "ambiguous" (or a git/history conflict) plus available_projects.
+        const projectStatus: 'resolved' | 'ambiguous' | 'unknown' =
+          project && projectSource !== 'ambiguous' ? 'resolved' : candidates.length ? 'ambiguous' : 'unknown';
         touchContext(ctx);
-        json(res, 200, { ok: true, contextId: ctx.id, project, projectSource, candidates, version: versionOut.trim() });
+        json(res, 200, {
+          ok: true,
+          contextId: ctx.id,
+          project,
+          projectSource,
+          projectPath,
+          projectStatus,
+          errorHint,
+          candidates,
+          version: versionOut.trim(),
+        });
         return;
       }
       case '/v1/recent': {

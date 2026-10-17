@@ -19,6 +19,7 @@ Decision records recorded on 2026-09-20. The product is implemented and live-ver
 | [0011](0011-packaging-capabilities.md) | Packaging — ship built assets, request only the `service` capability | Accepted |
 | [0012](0012-oc2-network-csp-images.md) | OpenChamber 2.0.4 network CSP — render remote images as links | Accepted |
 | [0013](0013-engram-3-4-floor.md) | Engram floor raised to >= 3.4.0 and surfaced in the panel title bar | Accepted |
+| [0014](0014-project-prediction.md) | Project prediction from `mem_current_project` with an ambiguity picker | Accepted |
 
 ## Convention
 
