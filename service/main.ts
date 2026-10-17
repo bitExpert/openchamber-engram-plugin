@@ -20,7 +20,8 @@ const ALLOWED_TOOLS = new Set([
   'mem_stats',
 ]);
 
-const ENGRAM_FLOOR = [2, 0];
+const ENGRAM_FLOOR = [3, 4];
+const ENGRAM_FLOOR_LABEL = `${ENGRAM_FLOOR[0]}.${ENGRAM_FLOOR[1]}.0`;
 const CONTEXT_IDLE_MS = 60_000;
 const MCP_CALL_TIMEOUT_MS = 8_000;
 const MAX_CONTEXTS = 2;
@@ -96,7 +97,7 @@ async function initializeMcp(ctx: Context): Promise<void> {
   await sendMcp(ctx, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'openchamber-engram', version: '0.2.0' },
+    clientInfo: { name: 'openchamber-engram', version: '0.3.0' },
   });
   await notify(ctx, 'notifications/initialized');
   const tools = await sendMcp(ctx, 'tools/list', {});
@@ -248,7 +249,12 @@ const server = http.createServer(async (req, res) => {
         });
         const version = parseVersion(versionOut);
         if (!meetsFloor(version)) {
-          json(res, 200, { ok: false, code: 'unsupported-engram', version: versionOut.trim() });
+          json(res, 200, {
+            ok: false,
+            code: 'unsupported-engram',
+            version: versionOut.trim(),
+            required: ENGRAM_FLOOR_LABEL,
+          });
           return;
         }
         const ctx = await spawnContext(config, directory);

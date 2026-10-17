@@ -11,12 +11,13 @@ A read-only OpenChamber extension that browses and searches [Engram](https://git
 - **Detail** — full observation (`mem_get_observation`) rendered as sanitized HTML; Markdown headings, lists, tables, code, blockquotes, links, images.
 - **Copy / Insert** — copy the raw observation or insert it into the chat composer.
 - **Project bound** — ownership is enforced service-side from the observation's `Project:` line; cross-project memories return a `project-mismatch` error.
+- **Version in the title bar** — the panel header shows the detected Engram version (`v3.4.0`); the extension requires Engram `>=3.4.0`.
 - **Read-only** — only read tools are exposed; nothing is ever written to the Engram store.
 
 ## Requirements
 
 - **OpenChamber 2.x** — `>=2.3.0`, built with `@openchamber/sdk@2.3.3` (wire API v1 compatible back to 1.22.0). Remote markdown images in observations render as links (opened in your browser) due to OpenChamber 2.0.4+ network sandboxing.
-- **Engram `>=2.0.0`** — the `engram` executable must be on `PATH` (extension checks the version; older versions get an explicit unsupported-version state).
+- **Engram `>=3.4.0`** — the `engram` executable must be on `PATH` (extension checks the version; older versions get an explicit unsupported-version state naming the required floor). The detected version is shown in the panel title bar.
 
 ## Install
 

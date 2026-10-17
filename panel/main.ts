@@ -47,12 +47,26 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, container: HTMLElemen
 
 const main = el('div', root);
 const toolbar = el('div', main, 'toolbar');
-const badge = mountBadge(toolbar, { label: 'Initializing', tone: 'neutral' });
+const toolbarMain = el('div', toolbar, 'toolbar-main');
+const titleCol = el('div', toolbarMain, 'title-col');
+const title = el('div', titleCol, 'title');
+const titleName = el('span', title, 'title-name');
+titleName.textContent = 'Engram Memory';
+const titleVersion = el('span', title, 'title-version');
+titleVersion.textContent = 'v?';
+titleVersion.title = 'Detected Engram version';
 const content = el('div', main, 'content');
 const statusNote = el('div', content, 'note');
 const viewRoot = el('div', content);
 
-const setBadge = (label: string, tone: Tone): void => badge.update({ label, tone });
+const versionLabel = (raw: string | undefined): string => {
+  const m = /(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)/.exec(raw ?? '');
+  return m ? `v${m[1]}` : 'v?';
+};
+
+const setVersion = (raw: string | undefined): void => {
+  titleVersion.textContent = versionLabel(raw);
+};
 
 async function pingService(): Promise<string | null> {
   try {
@@ -74,6 +88,7 @@ async function callService<T>(method: GuestRequestMethod, path: string, body: Re
 async function connect(): Promise<void> {
   viewRoot.textContent = '';
   setBadge('Connecting', 'neutral');
+  setVersion(undefined);
   statusNote.textContent = 'Starting local service…';
   const status = await pingService();
   if (status !== 'ready') {
@@ -82,17 +97,20 @@ async function connect(): Promise<void> {
   try {
     const dir = directory ?? processDirectory();
     const revision = JSON.stringify(config);
-    const result = await callService<{ ok: boolean; code?: string; contextId?: string; project?: string; projectSource?: string; candidates?: string[]; version?: string }>('POST', '/v1/connect', { config, configRevision: revision, directory: dir });
+    const result = await callService<{ ok: boolean; code?: string; contextId?: string; project?: string; projectSource?: string; candidates?: string[]; version?: string; required?: string }>('POST', '/v1/connect', { config, configRevision: revision, directory: dir });
+    setVersion(result.version);
     if (!result.ok) {
       setBadge(result.code === 'unsupported-engram' ? 'Unsupported Engram' : 'Failed', 'error');
-      statusNote.textContent = result.code === 'unsupported-engram' ? `Engram ${result.version ?? 'unknown'} is below the supported floor 2.0.0.` : `Connect failed: ${result.code ?? 'unknown'}`;
+      statusNote.textContent = result.code === 'unsupported-engram'
+        ? `Engram ${result.version ?? 'unknown'} is below the supported floor ${result.required ?? '3.4.0'}.`
+        : `Connect failed: ${result.code ?? 'unknown'}`;
       renderSetup();
       return;
     }
     state = result as ConnectState;
     currentAllContextId = result.contextId ?? null;
     setBadge('Ready', 'success');
-    statusNote.textContent = `Engram ${state.version}`;
+    statusNote.textContent = '';
     renderRecent();
   } catch (error) {
     setBadge('Unavailable', 'error');
@@ -190,7 +208,7 @@ function renderSetup(): void {
   note.textContent = 'Open the extension settings to change the executable, data directory, and project mapping.';
 }
 
-const searchFieldWrap = el('label', toolbar, 'oc-sdk oc-sdk-field');
+const searchFieldWrap = el('label', toolbarMain, 'oc-sdk oc-sdk-field');
 const searchCaption = el('span', searchFieldWrap, 'oc-sdk-field-label');
 searchCaption.textContent = 'Search memories';
 const searchField = mountSearchField(searchFieldWrap, {
@@ -198,7 +216,7 @@ const searchField = mountSearchField(searchFieldWrap, {
   autofocus: false, onChange: (value) => { query = value; void doSearch(); },
 });
 
-const modeSelect = mountSelect(toolbar, {
+const modeSelect = mountSelect(toolbarMain, {
   label: 'Match', value: broad ? 'any' : 'all',
   options: [
     { id: 'any', label: 'Broader', hint: 'Any keyword matches' },
@@ -207,7 +225,7 @@ const modeSelect = mountSelect(toolbar, {
   onChange: (value) => { broad = value === 'any'; void doSearch(); },
 });
 
-const limitSelect = mountSelect(toolbar, {
+const limitSelect = mountSelect(toolbarMain, {
   label: 'Limit', value: String(limit),
   options: [
     { id: '10', label: '10' },
@@ -215,6 +233,10 @@ const limitSelect = mountSelect(toolbar, {
   ],
   onChange: (value) => { limit = Number(value); void doSearch(); },
 });
+
+const titleStatus = el('div', titleCol, 'title-status');
+const badge = mountBadge(titleStatus, { label: 'Initializing', tone: 'neutral' });
+const setBadge = (label: string, tone: Tone): void => badge.update({ label, tone });
 
 host.onReady((context) => {
   applyHostReady(context, document.documentElement);
