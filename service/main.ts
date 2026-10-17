@@ -97,7 +97,7 @@ async function initializeMcp(ctx: Context): Promise<void> {
   await sendMcp(ctx, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: 'openchamber-engram', version: '0.4.0' },
+    clientInfo: { name: 'openchamber-engram', version: '0.3.0' },
   });
   await notify(ctx, 'notifications/initialized');
   const tools = await sendMcp(ctx, 'tools/list', {});
