@@ -8,7 +8,7 @@ Decision records recorded on 2026-09-20. The product is implemented and live-ver
 | --- | --- | --- |
 | [0001](0001-product-direction.md) | Product direction — Engram Memory Browser for OpenChamber (replaces Bifrost proposal) | Accepted |
 | [0002](0002-mcp-stdio-jsonl.md) | Integration transport — MCP over stdio, JSONL framing, no HTTP server/API token | Accepted |
-| [0003](0003-version-floor.md) | Version floor — Engram >= 2.0.0, OpenChamber >= 1.22.0, explicit unsupported state | Accepted |
+| [0003](0003-version-floor.md) | Version floor — Engram >= 2.0.0, OpenChamber >= 1.22.0, explicit unsupported state | Superseded by 0013 |
 | [0004](0004-read-only-allowlist.md) | Read-only policy — service-enforced tool allowlist | Accepted |
 | [0005](0005-project-ownership.md) | Project binding and observation ownership (`Project:` line re-check) | Accepted |
 | [0006](0006-recent-vs-search.md) | Recent is display-only; search is the interactive path to detail | Accepted |
@@ -17,6 +17,9 @@ Decision records recorded on 2026-09-20. The product is implemented and live-ver
 | [0009](0009-markdown-sanitization.md) | Markdown rendering — markdown-it + DOMPurify, `http(s)`-only links | Accepted |
 | [0010](0010-copy-insert.md) | Copy / Insert — explicit composer append, never auto-send | Accepted |
 | [0011](0011-packaging-capabilities.md) | Packaging — ship built assets, request only the `service` capability | Accepted |
+| [0012](0012-oc2-network-csp-images.md) | OpenChamber 2.0.4 network CSP — render remote images as links | Accepted |
+| [0013](0013-engram-3-4-floor.md) | Engram floor raised to >= 3.4.0 and surfaced in the panel title bar | Accepted |
+| [0014](0014-project-prediction.md) | Project prediction from `mem_current_project` with an ambiguity picker | Accepted |
 
 ## Convention
 

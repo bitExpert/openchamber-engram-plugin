@@ -17,7 +17,8 @@ var ALLOWED_TOOLS = new Set([
   "mem_timeline",
   "mem_stats"
 ]);
-var ENGRAM_FLOOR = [2, 0];
+var ENGRAM_FLOOR = [3, 4];
+var ENGRAM_FLOOR_LABEL = `${ENGRAM_FLOOR[0]}.${ENGRAM_FLOOR[1]}.0`;
 var CONTEXT_IDLE_MS = 60000;
 var MCP_CALL_TIMEOUT_MS = 8000;
 var MAX_CONTEXTS = 2;
@@ -86,7 +87,7 @@ async function initializeMcp(ctx) {
   await sendMcp(ctx, "initialize", {
     protocolVersion: "2024-11-05",
     capabilities: {},
-    clientInfo: { name: "openchamber-engram", version: "0.2.0" }
+    clientInfo: { name: "openchamber-engram", version: "0.4.0" }
   });
   await notify(ctx, "notifications/initialized");
   const tools = await sendMcp(ctx, "tools/list", {});
@@ -95,11 +96,18 @@ async function initializeMcp(ctx) {
   if (missing.length)
     throw new Error(`unsupported-engram`);
 }
-function contextId(directory, configRevision) {
-  return createHash("sha1").update(`${directory}\x00${configRevision}`).digest("hex").slice(0, 16);
+function contextId(directory, configKey) {
+  return createHash("sha1").update(`${directory}\x00${configKey}`).digest("hex").slice(0, 16);
+}
+function spawnKey(config) {
+  return JSON.stringify({
+    executable: config.executable ?? "engram",
+    dataDir: config.dataDir ?? null,
+    projectOverride: config.projectOverride ?? null
+  });
 }
 function spawnContext(config, directory) {
-  const id = contextId(directory, config.executable ?? "" + (config.dataDir ?? "") + (config.projectOverride ?? ""));
+  const id = contextId(directory, spawnKey(config));
   if (contexts.size >= MAX_CONTEXTS && !contexts.has(id)) {
     return Promise.reject(new Error("context-limit"));
   }
@@ -242,7 +250,6 @@ var server = http.createServer(async (req, res) => {
     switch (url.pathname) {
       case "/v1/connect": {
         const config = body.config ?? {};
-        const configRevision = String(body.configRevision ?? "default");
         const directory = String(body.directory ?? process.cwd());
         const executable = config.executable ?? "engram";
         const versionOut = await new Promise((resolve, reject) => {
@@ -254,29 +261,49 @@ var server = http.createServer(async (req, res) => {
         });
         const version = parseVersion(versionOut);
         if (!meetsFloor(version)) {
-          json(res, 200, { ok: false, code: "unsupported-engram", version: versionOut.trim() });
+          json(res, 200, {
+            ok: false,
+            code: "unsupported-engram",
+            version: versionOut.trim(),
+            required: ENGRAM_FLOOR_LABEL
+          });
           return;
         }
         const ctx = await spawnContext(config, directory);
-        const cur = await toolCall(ctx, "mem_current_project", {});
+        const cur = await toolCall(ctx, "mem_current_project", { directory });
         let project = "";
         let projectSource = "";
+        let projectPath = "";
+        let errorHint = "";
         let candidates = [];
         if (cur.text) {
           const { envelope } = parseEnvelope(cur.text);
           project = String(envelope?.project ?? "");
           projectSource = String(envelope?.project_source ?? "");
+          projectPath = String(envelope?.project_path ?? "");
+          errorHint = String(envelope?.error_hint ?? "");
           candidates = Array.isArray(envelope?.available_projects) ? envelope.available_projects : [];
         }
-        if (!project) {
+        if (!project && !candidates.length) {
           const pl = await toolCall(ctx, "mem_list_projects", {});
           if (pl.text) {
             const { envelope } = parseEnvelope(pl.text);
             candidates = envelope?.projects?.map((p) => p.name) ?? candidates;
           }
         }
+        const projectStatus = project && projectSource !== "ambiguous" ? "resolved" : candidates.length ? "ambiguous" : "unknown";
         touchContext(ctx);
-        json(res, 200, { ok: true, contextId: ctx.id, project, projectSource, candidates, version: versionOut.trim() });
+        json(res, 200, {
+          ok: true,
+          contextId: ctx.id,
+          project,
+          projectSource,
+          projectPath,
+          projectStatus,
+          errorHint,
+          candidates,
+          version: versionOut.trim()
+        });
         return;
       }
       case "/v1/recent": {
