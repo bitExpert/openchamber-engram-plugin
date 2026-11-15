@@ -58,6 +58,7 @@ interface PromptHit {
   content: string;
   preview: string;
   createdAt: string;
+  sessionId?: string | null;
 }
 
 const STORAGE_KEY = 'config/v1';
@@ -215,6 +216,7 @@ function processDirectory(): string {
 async function renderRecent(): Promise<void> {
   if (!state) return;
   const seq = ++renderSeq;
+  backTarget = { restore: 'list' };
   viewRoot.textContent = '';
   renderProjectLine(viewRoot);
   if (state.projectStatus === 'resolved') {
@@ -302,11 +304,39 @@ async function renderObservationsTab(container: HTMLElement): Promise<void> {
   });
 }
 
+interface Session {
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+  summary: string;
+  directory: string;
+  observationCount: number;
+  promptCount: number;
+}
+
+// Back navigation: each detail view records on entry where Back should return
+// to. Flows are at most two levels deep (list → session → observation/prompt),
+// so one mutable target is enough — no stack needed. 'list' means the tab list
+// (or the active search results when a query is set).
+type BackEntry = { restore: 'list' } | { restore: 'session'; sessionId: string };
+let backTarget: BackEntry = { restore: 'list' };
+
+function formatDuration(from: Date, to: Date): string {
+  const ms = Math.max(0, to.getTime() - from.getTime());
+  const minutes = Math.floor(ms / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
+}
+
 async function renderSessionsTab(container: HTMLElement): Promise<void> {
   if (!state) return;
   const seq = ++renderSeq;
   statusNote.textContent = '';
-  const result = await callService<{ ok: boolean; code?: string; document?: string }>('POST', '/v1/sessions', {
+  const result = await callService<{ ok: boolean; code?: string; sessions?: Session[] }>('POST', '/v1/sessions', {
     contextId: state.contextId,
     project: state.project || undefined,
   });
@@ -315,8 +345,30 @@ async function renderSessionsTab(container: HTMLElement): Promise<void> {
     statusNote.textContent = `Sessions unavailable: ${result.code ?? 'unknown'}`;
     return;
   }
-  const doc = el('div', container);
-  renderMarkdownInto(doc, result.document ?? '', (url) => void host.openUrl(url));
+  const sessions = result.sessions ?? [];
+  if (!sessions.length) {
+    const note = el('p', container, 'note');
+    note.textContent = 'No sessions found.';
+    return;
+  }
+  mountList(container, {
+    items: sessions.map((s) => {
+      const summaryFirstLine = s.summary.split('\n')[0].trim();
+      const title = summaryFirstLine || `Session ${s.id.slice(-8)}`;
+      const subtitle = s.summary && s.summary.split('\n').length > 1 ? s.summary.substring(0, 200) : undefined;
+      const meta = s.startedAt
+        ? `${new Date(s.startedAt).toLocaleDateString()} · ${s.observationCount} obs · ${s.promptCount} prompts`
+        : '—';
+      return {
+        id: s.id,
+        title,
+        subtitle,
+        meta,
+        badge: s.endedAt === null ? { label: 'active', tone: 'success' } : undefined,
+      };
+    }),
+    onSelect: (id) => void showSessionDetail(id),
+  });
 }
 
 async function renderPromptsTab(container: HTMLElement): Promise<void> {
@@ -363,10 +415,51 @@ function showPromptDetail(hit: PromptHit): void {
   renderSeq++;
   viewRoot.textContent = '';
   const back = el('div', viewRoot, 'actions');
-  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { if (query.trim()) void doSearch(); else void renderRecent(); } });
-  const title = el('h3', viewRoot);
-  title.textContent = hit.createdAt ? new Date(hit.createdAt).toLocaleString() : `Prompt #${hit.id}`;
-  const body = el('div', viewRoot);
+  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { goBack(); } });
+  // Card: title = first line of content, badge, meta (Created, Project, Prompt #id, Session)
+  const card = el('div', viewRoot, 'detail-card');
+  const head = el('div', card, 'detail-head');
+  const firstLine = (hit.content || '').split('\n')[0].trim();
+  const titleText = firstLine || `Prompt #${hit.id}`;
+  const h3 = el('h3', head, 'detail-title');
+  h3.textContent = titleText;
+  mountBadge(head, { label: 'prompt', tone: 'neutral' });
+  const meta = el('div', card, 'detail-meta');
+  const metaRows: Array<[string, string | HTMLElement]> = [
+    ['Created', hit.createdAt ? new Date(hit.createdAt).toLocaleString() : '—'],
+    ['Project', state.project || '—'],
+    ['Prompt', `#${hit.id}`],
+  ];
+  if (hit.sessionId) {
+    const sessionLink = el('a', meta, 'detail-meta-value');
+    sessionLink.href = '#';
+    sessionLink.textContent = `Session`;
+    sessionLink.onclick = () => {
+      backTarget = { restore: 'list' };
+      void showSessionDetail(hit.sessionId!);
+    };
+    metaRows.push(['Session', sessionLink]);
+  } else {
+    metaRows.push(['Session', '—']);
+  }
+  for (const [key, value] of metaRows) {
+    const k = el('span', meta, 'detail-meta-key');
+    k.textContent = key;
+    if (typeof value === 'string') {
+      const v = el('span', meta, 'detail-meta-value');
+      v.textContent = value;
+    } else {
+      (value as HTMLElement).className = 'detail-meta-value';
+      meta.appendChild(value);
+    }
+  }
+  // Divider below card, then section below for content
+  const divider = el('hr', viewRoot, 'detail-divider');
+  void divider;
+  const section = el('div', viewRoot, 'section');
+  const sectionHeading = el('h4', section, 'section-heading');
+  sectionHeading.textContent = 'Prompt';
+  const body = el('div', section);
   renderMarkdownInto(body, hit.content, (url) => void host.openUrl(url));
   const actions = el('div', viewRoot, 'actions');
   mountButton(actions, { label: 'Copy prompt', size: 'sm', onClick: () => { void host.writeClipboard(hit.content); setBadge('Copied', 'success'); setTimeout(() => setBadge('Ready', 'success'), 1500); } });
@@ -377,11 +470,142 @@ function showPromptDetail(hit: PromptHit): void {
   } });
 }
 
+async function showSessionDetail(sessionId: string): Promise<void> {
+  if (!state || state.projectStatus !== 'resolved') return;
+  const seq = ++renderSeq;
+  viewRoot.textContent = '';
+  backTarget = { restore: 'list' };
+  currentTab = 'sessions';
+
+  const back = el('div', viewRoot, 'actions');
+  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { void goBack(); } });
+
+  const result = await callService<{ ok: boolean; code?: string; session?: any; observations?: any[]; prompts?: any[] }>('POST', '/v1/sessionDetail', {
+    contextId: state.contextId,
+    project: state.project,
+    sessionId,
+  });
+  if (seq !== renderSeq) return;
+  if (!result.ok) {
+    statusNote.textContent = `Session detail failed: ${result.code ?? 'unknown'}`;
+    return;
+  }
+
+  const session = result.session;
+  const summaryFirstLine = (session?.summary || '').split('\n')[0].trim();
+  const title = summaryFirstLine || `Session ${sessionId.slice(-8)}`;
+  const started = session?.startedAt ? new Date(session.startedAt) : null;
+  const ended = session?.endedAt ? new Date(session.endedAt) : null;
+
+  // Session header card: title + state badge, meta grid, count tiles
+  const card = el('div', viewRoot, 'detail-card');
+  const head = el('div', card, 'detail-head');
+  const h3 = el('h3', head, 'detail-title');
+  h3.textContent = title;
+  mountBadge(head, { label: ended ? 'ended' : 'active', tone: ended ? 'neutral' : 'success' });
+
+  const meta = el('div', card, 'detail-meta');
+  const metaRows: Array<[string, string]> = [
+    ['Started', started ? started.toLocaleString() : '—'],
+    ['Ended', ended ? ended.toLocaleString() : '—'],
+    ['Duration', started ? formatDuration(started, ended ?? new Date()) : '—'],
+    ['Project', session?.project || state.project || '—'],
+    ['Directory', session?.directory || '—'],
+  ];
+  for (const [key, value] of metaRows) {
+    const k = el('span', meta, 'detail-meta-key');
+    k.textContent = key;
+    const v = el('span', meta, 'detail-meta-value');
+    v.textContent = value;
+  }
+
+  const counts = el('div', card, 'session-counts');
+  const obsCount = el('div', counts, 'count-tile');
+  const obsValue = el('span', obsCount, 'count-value');
+  obsValue.textContent = String(result.observations?.length ?? 0);
+  const obsLabel = el('span', obsCount, 'count-label');
+  obsLabel.textContent = 'Observations';
+  const promptCount = el('div', counts, 'count-tile');
+  const promptValue = el('span', promptCount, 'count-value');
+  promptValue.textContent = String(result.prompts?.length ?? 0);
+  const promptLabel = el('span', promptCount, 'count-label');
+  promptLabel.textContent = 'Prompts';
+
+  // Summary section
+  if (session?.summary) {
+    const section = el('div', viewRoot, 'section');
+    const heading = el('h4', section, 'section-heading');
+    heading.textContent = 'Summary';
+    const body = el('div', section);
+    renderMarkdownInto(body, session.summary, (url) => void host.openUrl(url));
+  }
+
+  // Observations section
+  {
+    const section = el('div', viewRoot, 'section');
+    const heading = el('h4', section, 'section-heading');
+    heading.textContent = 'Observations';
+    if (result.observations?.length) {
+      mountList(section, {
+        items: result.observations.map((o: any) => ({
+          id: String(o.id),
+          title: o.title,
+          subtitle: o.preview,
+          leading: o.type,
+          meta: o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '',
+        })),
+        onSelect: (id) => { backTarget = { restore: 'session', sessionId }; void showDetail(Number(id)); },
+      });
+    } else {
+      const note = el('p', section, 'note');
+      note.textContent = 'No observations in this session.';
+    }
+  }
+
+  // Prompts section
+  {
+    const section = el('div', viewRoot, 'section');
+    const heading = el('h4', section, 'section-heading');
+    heading.textContent = 'Prompts';
+    if (result.prompts?.length) {
+      mountList(section, {
+        items: result.prompts.map((p: any) => ({
+          id: String(p.id),
+          title: p.content.split('\n')[0] || `Prompt #${p.id}`,
+          subtitle: p.content,
+          meta: p.createdAt ? new Date(p.createdAt).toLocaleString() : '',
+        })),
+        onSelect: (id) => {
+          const p = result.prompts?.find((pp: any) => String(pp.id) === id);
+          if (p) { backTarget = { restore: 'session', sessionId }; void showPromptDetail(p); }
+        },
+      });
+    } else {
+      const note = el('p', section, 'note');
+      note.textContent = 'No prompts in this session.';
+    }
+  }
+}
+
+function goBack(): void {
+  const target = backTarget;
+  backTarget = { restore: 'list' };
+  viewRoot.textContent = '';
+  if (target.restore === 'session') {
+    void showSessionDetail(target.sessionId);
+  } else if (query.trim()) {
+    void doSearch();
+  } else {
+    void renderRecent();
+  }
+}
+
 async function doSearch(): Promise<void> {
   if (!state) return;
   if (state.projectStatus !== 'resolved') { renderProjectGate(); return; }
   if (!query.trim()) { void renderRecent(); return; }
   const seq = ++renderSeq;
+  backTarget = { restore: 'list' };
   viewRoot.textContent = '';
   const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>('POST', '/v1/search', {
     contextId: state.contextId,
@@ -424,16 +648,35 @@ async function showDetail(id: number): Promise<void> {
   const seq = ++renderSeq;
   viewRoot.textContent = '';
   const back = el('div', viewRoot, 'actions');
-  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { if (query.trim()) void doSearch(); else void renderRecent(); } });
+  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { goBack(); } });
   const result = await callService<{ ok: boolean; code?: string; title?: string; markdown?: string }>('POST', '/v1/getMemory', { contextId: state.contextId, id, project: state.project || undefined });
   if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Detail failed: ${result.code ?? 'unknown'}`;
     return;
   }
-  const title = el('h3', viewRoot);
-  title.textContent = result.title ?? `Memory #${id}`;
-  const body = el('div', viewRoot);
+  // Card: title (from memory title), observation badge, meta (Project, Memory #id), divider, then Markdown inside card
+  const card = el('div', viewRoot, 'detail-card');
+  const head = el('div', card, 'detail-head');
+  const titleText = result.title ?? `Memory #${id}`;
+  const h3 = el('h3', head, 'detail-title');
+  h3.textContent = titleText;
+  mountBadge(head, { label: 'observation', tone: 'neutral' });
+  const meta = el('div', card, 'detail-meta');
+  const metaRows: Array<[string, string]> = [
+    ['Project', state.project || '—'],
+    ['Memory', `#${id}`],
+  ];
+  for (const [key, value] of metaRows) {
+    const k = el('span', meta, 'detail-meta-key');
+    k.textContent = key;
+    const v = el('span', meta, 'detail-meta-value');
+    v.textContent = value;
+  }
+  // Divider below card, then Markdown body inside card
+  const divider = el('hr', card, 'detail-divider');
+  void divider;
+  const body = el('div', card);
   renderMarkdownInto(body, result.markdown ?? '', (url) => void host.openUrl(url));
   const actions = el('div', viewRoot, 'actions');
   mountButton(actions, { label: 'Copy Markdown', size: 'sm', onClick: () => { void host.writeClipboard(result.markdown ?? ''); setBadge('Copied', 'success'); setTimeout(() => setBadge('Ready', 'success'), 1500); } });

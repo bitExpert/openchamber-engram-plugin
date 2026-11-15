@@ -8,8 +8,6 @@
       #root { height: 100%; display: flex; flex-direction: column; }
       .toolbar { padding: 8px 10px; border-bottom: 1px solid var(--ok-3, rgba(128,128,128,0.25)); }
       .toolbar-main { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
-      /* Pin the first line (title + control captions) to one line-height so the title
-         column's second line lands on the same row as the inputs/select triggers. */
       .toolbar-main .oc-sdk-field-label { line-height: 20px; }
       .title-col { display: flex; flex-direction: column; gap: 4px; }
       .title { display: flex; align-items: baseline; gap: 6px; margin-right: 4px; white-space: nowrap; }
@@ -34,16 +32,27 @@
       .content table { border-collapse: collapse; width: 100%; }
       .content :is(th, td) { border: 1px solid var(--ok-3, rgba(128,128,128,0.3)); padding: 4px 8px; text-align: left; }
       .content blockquote { border-left: 3px solid var(--ok-3, rgba(128,128,128,0.4)); margin-left: 0; padding-left: 10px; color: var(--ok-2, #888); }
-      /* Stat tiles mirror the app's UsageStatsView StatTile: a grid of elevated
-         cards with a hairline edge, micro muted label and a large tabular value.
-         Colors come from the host theme tokens the SDK writes onto the iframe
-         root, so tiles follow the running app's theme without any rebuild. */
       .stats-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 2px 0 8px; }
       .stat-tile { display: flex; min-width: 0; flex-direction: column; gap: 2px; border-radius: var(--radius, 9px); border: 1px solid color-mix(in srgb, var(--interactive-border, currentColor) 70%, transparent); background: var(--surface-elevated, transparent); padding: 10px 12px; }
       .stat-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; line-height: 1.45; color: var(--surface-muted-foreground, gray); }
       .stat-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.25rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--surface-foreground, inherit); }
       .tabs-section { margin-top: 8px; }
       .tab-content { margin-top: 10px; }
+      .detail-card { display: flex; flex-direction: column; gap: 12px; border-radius: var(--radius, 9px); border: 1px solid color-mix(in srgb, var(--interactive-border, currentColor) 70%, transparent); background: var(--surface-elevated, transparent); padding: 12px 14px; }
+      .detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .detail-title { flex: 1; min-width: 0; margin: 0; font-size: 1rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+      .detail-meta { display: grid; grid-template-columns: minmax(84px, max-content) minmax(0, 1fr); gap: 6px 14px; font-size: 0.8125rem; }
+      .detail-meta-key { color: var(--surface-muted-foreground, gray); }
+      .detail-meta-value { color: var(--surface-foreground, inherit); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+      .detail-meta-value a { color: var(--primary, #5b8def); text-decoration: none; }
+      .detail-meta-value a:hover { text-decoration: underline; }
+      .detail-divider { border: 0; border-top: 1px solid color-mix(in srgb, var(--interactive-border, currentColor) 60%, transparent); }
+      .session-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .count-tile { display: flex; flex-direction: column; gap: 2px; border-radius: var(--radius, 9px); border: 1px solid color-mix(in srgb, var(--interactive-border, currentColor) 70%, transparent); padding: 8px 12px; }
+      .count-value { font-size: 1.1rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--surface-foreground, inherit); }
+      .count-label { font-size: 0.75rem; line-height: 1.45; color: var(--surface-muted-foreground, gray); }
+      .section { margin-top: 20px; }
+      .section-heading { margin: 0 0 8px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--surface-muted-foreground, gray); }
     </style>
   </head>
   <body>

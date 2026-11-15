@@ -1,3 +1,22 @@
+import { createRequire } from "node:module";
+var __create = Object.create;
+var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __toESM = (mod, isNodeMode, target) => {
+  target = mod != null ? __create(__getProtoOf(mod)) : {};
+  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  for (let key of __getOwnPropNames(mod))
+    if (!__hasOwnProp.call(to, key))
+      __defProp(to, key, {
+        get: () => mod[key],
+        enumerable: true
+      });
+  return to;
+};
+var __require = /* @__PURE__ */ createRequire(import.meta.url);
+
 // service/main.ts
 import http from "node:http";
 import { spawn, execFile } from "node:child_process";
@@ -23,6 +42,7 @@ var CONTEXT_IDLE_MS = 60000;
 var MCP_CALL_TIMEOUT_MS = 8000;
 var MAX_CONTEXTS = 2;
 var contexts = new Map;
+var sessionExportCache = new Map;
 var json = (res, status, body) => {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
@@ -231,6 +251,56 @@ function projectOfDetail(text) {
   }
   return null;
 }
+async function exportProject(ctx, project) {
+  const cacheKey = `${ctx.id}:${project}`;
+  const now = Date.now();
+  const cached = sessionExportCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return { ok: true, data: cached.data };
+  }
+  const tmpFile = `/tmp/opencode/engram-export-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`;
+  try {
+    const result = await new Promise((resolve) => {
+      const env = { ...process.env };
+      if (ctx.dataDir)
+        env.ENGRAM_DATA_DIR = ctx.dataDir;
+      if (ctx.projectOverride)
+        env.ENGRAM_PROJECT = ctx.projectOverride;
+      let stdout = "";
+      let stderr = "";
+      const proc = spawn(ctx.executable, ["export", tmpFile, "--project", project], { cwd: ctx.directory, env, shell: false });
+      proc.stdout.on("data", (d) => {
+        stdout += d;
+      });
+      proc.stderr.on("data", (d) => {
+        stderr += d;
+      });
+      proc.on("close", (code) => resolve({ stdout, stderr, code }));
+      proc.on("error", (err) => resolve({ stdout, stderr, code: -1 }));
+      setTimeout(() => {
+        proc.kill("SIGTERM");
+        resolve({ stdout, stderr, code: -1 });
+      }, 8000);
+    });
+    if (result.code !== 0) {
+      sessionExportCache.delete(cacheKey);
+      return { ok: false, code: result.stderr.includes("not found") ? "not-found" : "read-failed" };
+    }
+    const raw = await new Promise((resolve, reject) => {
+      import("node:fs").then(({ readFile }) => {
+        readFile(tmpFile, "utf8", (err, data2) => err ? reject(err) : resolve(data2));
+      }).catch(reject);
+    });
+    const data = JSON.parse(raw);
+    sessionExportCache.set(cacheKey, { project, data, expiresAt: now + 30000 });
+    return { ok: true, data };
+  } catch (err) {
+    sessionExportCache.delete(cacheKey);
+    return { ok: false, code: err instanceof Error ? err.message : String(err) };
+  } finally {
+    import("node:fs").then(({ unlink }) => unlink(tmpFile, () => {})).catch(() => {});
+  }
+}
 var server = http.createServer(async (req, res) => {
   if (req.headers.authorization !== `Bearer ${token}`) {
     json(res, 401, { error: "unauthorized" });
@@ -332,8 +402,8 @@ var server = http.createServer(async (req, res) => {
         const { envelope, parsed } = parseEnvelope(r.text);
         const results = Array.isArray(envelope?.results) ? envelope.results : [];
         results.sort((a, b) => {
-          const at = a.created_at ?? "";
-          const bt = b.created_at ?? "";
+          const at = String(a.created_at ?? "");
+          const bt = String(b.created_at ?? "");
           return bt.localeCompare(at);
         });
         const message = parsed.trim();
@@ -359,19 +429,98 @@ var server = http.createServer(async (req, res) => {
           return;
         }
         const project = typeof body.project === "string" ? body.project : undefined;
-        const r = await toolCall(ctx, "mem_context", {
-          ...project ? { project } : {},
-          max_bytes: 8192,
-          compact: true
-        });
-        if (r.error) {
-          json(res, 200, { ok: false, code: "read-failed", message: r.error });
+        if (!project) {
+          json(res, 200, { ok: false, code: "missing-project" });
           return;
         }
-        const { envelope, parsed } = parseEnvelope(r.text);
-        const sessionMatches = parsed.match(/### Recent Sessions([\s\S]*?)(?=###|$)/);
-        const sessionsText = sessionMatches ? sessionMatches[1].trim() : "";
-        json(res, 200, { ok: true, document: sessionsText, envelopeProject: envelope?.project ?? null });
+        const exp = await exportProject(ctx, project);
+        if (!exp.ok) {
+          json(res, 200, { ok: false, code: exp.code ?? "read-failed" });
+          return;
+        }
+        const sessions = [];
+        const sessionsMap = new Map;
+        for (const s of exp.data.sessions || []) {
+          sessionsMap.set(s.id, { ...s, observationCount: 0, promptCount: 0 });
+        }
+        for (const o of exp.data.observations || []) {
+          const sid = o.session_id;
+          if (sessionsMap.has(sid))
+            sessionsMap.get(sid).observationCount++;
+        }
+        for (const p of exp.data.prompts || []) {
+          const sid = p.session_id;
+          if (sessionsMap.has(sid))
+            sessionsMap.get(sid).promptCount++;
+        }
+        for (const s of sessionsMap.values()) {
+          sessions.push({
+            id: s.id,
+            startedAt: s.started_at,
+            endedAt: s.ended_at ?? null,
+            summary: s.summary ?? "",
+            directory: s.directory ?? "",
+            observationCount: s.observationCount,
+            promptCount: s.promptCount
+          });
+        }
+        sessions.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
+        json(res, 200, { ok: true, sessions });
+        return;
+      }
+      case "/v1/sessionDetail": {
+        const ctx = contexts.get(String(body.contextId ?? ""));
+        if (!ctx) {
+          json(res, 200, { ok: false, code: "no-context" });
+          return;
+        }
+        const project = typeof body.project === "string" ? body.project : undefined;
+        const sessionId = String(body.sessionId ?? "");
+        if (!project || !sessionId) {
+          json(res, 200, { ok: false, code: "missing-project-or-session" });
+          return;
+        }
+        const exp = await exportProject(ctx, project);
+        if (!exp.ok) {
+          json(res, 200, { ok: false, code: exp.code ?? "read-failed" });
+          return;
+        }
+        const session = (exp.data.sessions || []).find((s) => s.id === sessionId);
+        if (!session) {
+          json(res, 200, { ok: false, code: "unknown-session" });
+          return;
+        }
+        const sessionProject = session.project ?? "";
+        if (sessionProject !== project) {
+          json(res, 200, { ok: false, code: "project-mismatch" });
+          return;
+        }
+        const obs = (exp.data.observations || []).filter((o) => o.session_id === sessionId && !o.deleted_at).map((o) => ({
+          id: o.id,
+          title: o.title,
+          type: o.type,
+          preview: o.content ? o.content.substring(0, 300).trim() : "",
+          createdAt: o.created_at
+        })).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).slice(0, 50);
+        const prompts = (exp.data.prompts || []).filter((p) => p.session_id === sessionId).map((p) => ({
+          id: p.id,
+          content: p.content,
+          createdAt: p.created_at,
+          sessionId: p.session_id
+        })).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).slice(0, 50);
+        json(res, 200, {
+          ok: true,
+          session: {
+            id: session.id,
+            startedAt: session.started_at,
+            endedAt: session.ended_at ?? null,
+            summary: session.summary ?? "",
+            directory: session.directory ?? "",
+            project: session.project ?? ""
+          },
+          observations: obs,
+          prompts
+        });
         return;
       }
       case "/v1/prompts": {
@@ -398,8 +547,8 @@ var server = http.createServer(async (req, res) => {
         const { envelope, parsed } = parseEnvelope(r.text);
         const results = Array.isArray(envelope?.results) ? envelope.results : [];
         results.sort((a, b) => {
-          const at = a.created_at ?? "";
-          const bt = b.created_at ?? "";
+          const at = String(a.created_at ?? "");
+          const bt = String(b.created_at ?? "");
           return bt.localeCompare(at);
         });
         const message = parsed.trim();

@@ -12,6 +12,7 @@ A read-only OpenChamber extension that browses and searches [Engram](https://git
 - **Copy / Insert** — copy the raw observation or insert it into the chat composer.
 - **Project bound** — the active project is resolved via `mem_current_project` (git remote, `.engram` config, or an explicit override) and shown at the top of the view; queries are project-scoped. When Engram cannot decide (multiple projects match, or a git/history conflict) the panel offers a project picker instead of guessing. Ownership is enforced service-side from the observation's `Project:` line; cross-project memories return a `project-mismatch` error.
 - **Project stats** — per-project sessions/observations/prompts shown as stat tiles in the content area, loaded automatically on connect (no manual refresh), pulled from `mem_list_projects` (Engram `>=3.4.0`).
+- **Session details** — click on a session in the Sessions tab to see its details (start, end, directory, counts), summary (rendered as Markdown), observations list, and prompts list. No Copy/Insert actions for session summaries.
 - **Version in the title bar** — the panel header shows the detected Engram version (`v3.4.0`); the extension requires Engram `>=3.4.0`.
 - **Read-only** — only read tools are exposed; nothing is ever written to the Engram store.
 
@@ -74,11 +75,15 @@ Loopback HTTP service, authenticated with `Authorization: Bearer <OPENCHAMBER_SE
 | Route            | Purpose                                   |
 | ---------------- | ----------------------------------------- |
 | `/v1/connect`    | Spawn Engram, version check, resolve project (`project`, `projectStatus`, `projectPath`, `candidates`, `version`) |
-| `/v1/recent`     | Display-only `mem_context` document       |
-| `/v1/stats`      | Project-scoped stats (`sessions`, `observations`, `prompts`) |
-| `/v1/search`     | Project-scoped `mem_search` hits          |
-| `/v1/getMemory`  | Full observation Markdown for an id       |
-| `/v1/disconnect` | Kill the child and shut down              |
+| `/v1/recent`       | Display-only `mem_context` document       |
+| `/v1/stats`        | Project-scoped stats (`sessions`, `observations`, `prompts`) |
+| `/v1/search`       | Project-scoped `mem_search` hits          |
+| `/v1/observations` | Project-scoped observations list          |
+| `/v1/sessions`     | Project-scoped sessions list (structured) |
+| `/v1/sessionDetail`| Full session details, observations, prompts |
+| `/v1/prompts`      | Project-scoped prompts list               |
+| `/v1/getMemory`    | Full observation Markdown for an id       |
+| `/v1/disconnect`   | Kill the child and shut down              |
 
 All replies are `{ ok: true, ... }` on success or `{ ok: false, code, message }` on failure. Codes: `no-context`, `empty-query`, `project-mismatch`, `invalid-id`, `read-failed`, `unsupported-engram`, `service-error`.
 
