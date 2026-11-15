@@ -16,7 +16,7 @@ const ALLOWED_TOOLS = new Set([
   'mem_context',
   'mem_search',
   'mem_get_observation',
-  'mem_timeline',
+  'mem_search_prompts',
   'mem_stats',
 ]);
 
@@ -41,6 +41,10 @@ interface Context {
 }
 
 const contexts = new Map<string, Context>();
+
+// Session export cache: contextId → { project, data, expiresAt }
+// 30 s TTL to keep the sessions tab responsive without stale data.
+const sessionExportCache = new Map<string, { project: string; data: any; expiresAt: number }>();
 
 const json = (res: http.ServerResponse, status: number, body: unknown): void => {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -231,6 +235,97 @@ function projectOfDetail(text: string): string | null {
   return null;
 }
 
+// Observation facts from a mem_get_observation result. The stored text is
+// "#<id> [<type>] <title>" followed by the content and a trailing
+// bookkeeping block ("Session:", "Project:", "Scope:", "Topic:",
+// "Duplicates:", "Revisions:", "Created:" — one per line). The detail card
+// shows these facts, so the body drops the header line and the block.
+function observationFacts(parsed: string): {
+  title: string;
+  type: string;
+  createdAt: string | null;
+  sessionId: string | null;
+  scope: string | null;
+  topic: string | null;
+  body: string;
+} {
+  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
+  const meta: Record<string, string> = {};
+  const lines = parsed.split('\n');
+  let i = lines.length;
+  while (i > 0) {
+    const line = lines[i - 1].trim();
+    if (!line) { i -= 1; continue; }
+    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
+    if (!m) break;
+    meta[m[1]] = m[2].trim();
+    i -= 1;
+  }
+  const bodyLines = lines.slice(0, i);
+  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
+    bodyLines.shift();
+  }
+  return {
+    title: (headerMatch?.[2] ?? '').trim(),
+    type: (headerMatch?.[1] ?? '').trim(),
+    createdAt: meta.Created ?? null,
+    sessionId: meta.Session ?? null,
+    scope: meta.Scope ?? null,
+    topic: meta.Topic ?? null,
+    body: bodyLines.join('\n').trim(),
+  };
+}
+
+async function exportProject(ctx: Context, project: string): Promise<{ ok: boolean; data?: any; code?: string }> {
+  const cacheKey = `${ctx.id}:${project}`;
+  const now = Date.now();
+  const cached = sessionExportCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return { ok: true, data: cached.data };
+  }
+
+  const tmpFile = `/tmp/opencode/engram-export-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`;
+  try {
+    const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      if (ctx.dataDir) env.ENGRAM_DATA_DIR = ctx.dataDir;
+      if (ctx.projectOverride) env.ENGRAM_PROJECT = ctx.projectOverride;
+      let stdout = '';
+      let stderr = '';
+      const proc = spawn(ctx.executable, ['export', tmpFile, '--project', project], { cwd: ctx.directory, env, shell: false });
+      proc.stdout.on('data', (d) => { stdout += d; });
+      proc.stderr.on('data', (d) => { stderr += d; });
+      proc.on('close', (code) => resolve({ stdout, stderr, code }));
+      proc.on('error', (err) => resolve({ stdout, stderr, code: -1 }));
+      setTimeout(() => {
+        proc.kill('SIGTERM');
+        resolve({ stdout, stderr, code: -1 });
+      }, 8000);
+    });
+
+    if (result.code !== 0) {
+      sessionExportCache.delete(cacheKey);
+      return { ok: false, code: result.stderr.includes('not found') ? 'not-found' : 'read-failed' };
+    }
+
+    const raw = await new Promise<string>((resolve, reject) => {
+      import('node:fs').then(({ readFile }) => {
+        readFile(tmpFile, 'utf8', (err, data) => err ? reject(err) : resolve(data));
+      }).catch(reject);
+    });
+
+    const data = JSON.parse(raw);
+    sessionExportCache.set(cacheKey, { project, data, expiresAt: now + 30_000 });
+    return { ok: true, data };
+  } catch (err) {
+    sessionExportCache.delete(cacheKey);
+    return { ok: false, code: err instanceof Error ? err.message : String(err) };
+  } finally {
+    // Cleanup tmp file
+    import('node:fs').then(({ unlink }) => unlink(tmpFile, () => {})).catch(() => {});
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.headers.authorization !== `Bearer ${token}`) {
     json(res, 401, { error: 'unauthorized' });
@@ -286,8 +381,8 @@ const server = http.createServer(async (req, res) => {
         if (!project && !candidates.length) {
           const pl = await toolCall(ctx, 'mem_list_projects', {});
           if (pl.text) {
-            const { envelope } = parseEnvelope(pl.text);
-            candidates = (envelope?.projects as { name: string }[] | undefined)?.map((p) => p.name) ?? candidates;
+            const parsed = JSON.parse(pl.text) as { projects?: { name: string }[]; count: number };
+            candidates = (parsed.projects ?? []).map((p) => p.name);
           }
         }
         // `mem_current_project` never errors on ambiguity: it returns project "" with
@@ -308,18 +403,190 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
-      case '/v1/recent': {
+      case '/v1/observations': {
         const ctx = contexts.get(String(body.contextId ?? ''));
         if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
         const project = typeof body.project === 'string' ? body.project : undefined;
-        const r = await toolCall(ctx, 'mem_context', {
-          ...(project ? { project } : {}),
-          max_bytes: 16_384,
-          compact: true,
+        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+        const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
+        // Use project name as query — every row matches via its project column.
+        // LIKE path (short term) or FTS both include project in the disjunction,
+        // so querying the project name itself returns all rows of that project.
+        // Re-sort by created_at DESC before returning (FTS returns BM25 relevance order).
+        const r = await toolCall(ctx, 'mem_search', {
+          query: project,
+          project,
+          limit,
+          response_format: 'compact',
+          match_mode: 'all',
         });
         if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
         const { envelope, parsed } = parseEnvelope(r.text!);
-        json(res, 200, { ok: true, document: parsed, envelopeProject: envelope?.project ?? null });
+        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
+        // Sort by created_at DESC (most recent first)
+        results.sort((a, b) => {
+          const at = String(a.created_at ?? '');
+          const bt = String(b.created_at ?? '');
+          return bt.localeCompare(at);
+        });
+        const message = parsed.trim();
+        json(res, 200, {
+          ok: true,
+          hits: results.map((row) => ({
+            id: row.id,
+            title: row.title,
+            type: row.type,
+            preview: row.preview,
+            truncated: row.truncated,
+            scope: row.scope,
+            createdAt: row.created_at,
+          })),
+          note: message && results.length === 0 ? message : undefined,
+        });
+        return;
+      }
+      case '/v1/sessions': {
+        const ctx = contexts.get(String(body.contextId ?? ''));
+        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        const project = typeof body.project === 'string' ? body.project : undefined;
+        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+
+        const exp = await exportProject(ctx, project);
+        if (!exp.ok) { json(res, 200, { ok: false, code: exp.code ?? 'read-failed' }); return; }
+
+        // Build session list from export
+        const sessions: any[] = [];
+        const sessionsMap = new Map();
+        for (const s of exp.data.sessions || []) {
+          sessionsMap.set(s.id, { ...s, observationCount: 0, promptCount: 0 });
+        }
+        for (const o of exp.data.observations || []) {
+          const sid = o.session_id;
+          if (sessionsMap.has(sid)) sessionsMap.get(sid).observationCount++;
+        }
+        for (const p of exp.data.prompts || []) {
+          const sid = p.session_id;
+          if (sessionsMap.has(sid)) sessionsMap.get(sid).promptCount++;
+        }
+        for (const s of sessionsMap.values()) {
+          sessions.push({
+            id: s.id,
+            startedAt: s.started_at,
+            endedAt: s.ended_at ?? null,
+            summary: s.summary ?? '',
+            directory: s.directory ?? '',
+            observationCount: s.observationCount,
+            promptCount: s.promptCount,
+          });
+        }
+        // Sort by started_at DESC
+        sessions.sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''));
+
+        json(res, 200, { ok: true, sessions });
+        return;
+      }
+      case '/v1/sessionDetail': {
+        const ctx = contexts.get(String(body.contextId ?? ''));
+        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        const project = typeof body.project === 'string' ? body.project : undefined;
+        const sessionId = String(body.sessionId ?? '');
+        if (!project || !sessionId) {
+          json(res, 200, { ok: false, code: 'missing-project-or-session' });
+          return;
+        }
+
+        const exp = await exportProject(ctx, project);
+        if (!exp.ok) { json(res, 200, { ok: false, code: exp.code ?? 'read-failed' }); return; }
+
+        const session = (exp.data.sessions || []).find((s: any) => s.id === sessionId);
+        if (!session) {
+          json(res, 200, { ok: false, code: 'unknown-session' });
+          return;
+        }
+
+        // Guard: session must belong to the requested project
+        const sessionProject = session.project ?? '';
+        if (sessionProject !== project) {
+          json(res, 200, { ok: false, code: 'project-mismatch' });
+          return;
+        }
+
+        // Build observations list (capped at 50, newest-first)
+        const obs = (exp.data.observations || [])
+          .filter((o: any) => o.session_id === sessionId && !o.deleted_at)
+          .map((o: any) => ({
+            id: o.id,
+            title: o.title,
+            type: o.type,
+            preview: o.content ? o.content.substring(0, 300).trim() : '',
+            createdAt: o.created_at,
+          }))
+          .sort((a: any, b: any) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+          .slice(0, 50);
+
+        // Build prompts list (capped at 50, newest-first)
+        const prompts = (exp.data.prompts || [])
+          .filter((p: any) => p.session_id === sessionId)
+          .map((p: any) => ({
+            id: p.id,
+            content: p.content,
+            createdAt: p.created_at,
+            sessionId: p.session_id,
+          }))
+          .sort((a: any, b: any) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+          .slice(0, 50);
+
+        json(res, 200, {
+          ok: true,
+          session: {
+            id: session.id,
+            startedAt: session.started_at,
+            endedAt: session.ended_at ?? null,
+            summary: session.summary ?? '',
+            directory: session.directory ?? '',
+            project: session.project ?? '',
+          },
+          observations: obs,
+          prompts: prompts,
+        });
+        return;
+      }
+      case '/v1/prompts': {
+        const ctx = contexts.get(String(body.contextId ?? ''));
+        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        const project = typeof body.project === 'string' ? body.project : undefined;
+        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+        const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
+        // Use project name as query — every row matches via its project column.
+        // LIKE path (short term) or FTS both include project in the disjunction,
+        // so querying the project name itself returns all rows of that project.
+        // Re-sort by created_at DESC before returning (FTS returns BM25 relevance order).
+        const r = await toolCall(ctx, 'mem_search_prompts', {
+          query: project,
+          project,
+          limit,
+        });
+        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        const { envelope, parsed } = parseEnvelope(r.text!);
+        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
+        // Sort by created_at DESC (most recent first)
+        results.sort((a, b) => {
+          const at = String(a.created_at ?? '');
+          const bt = String(b.created_at ?? '');
+          return bt.localeCompare(at);
+        });
+        const message = parsed.trim();
+        json(res, 200, {
+          ok: true,
+          hits: results.map((row) => ({
+            id: row.id,
+            content: row.content,
+            preview: typeof row.content === 'string' ? row.content.substring(0, 200).trim() : '',
+            createdAt: row.created_at,
+            sessionId: row.session_id,
+          })),
+          note: message && results.length === 0 ? message : undefined,
+        });
         return;
       }
       case '/v1/search': {
@@ -369,8 +636,31 @@ const server = http.createServer(async (req, res) => {
           json(res, 200, { ok: false, code: 'project-mismatch' });
           return;
         }
-        const titleMatch = /^#[0-9]+\s*([^\n]*)/.exec(parsed.trim());
-        json(res, 200, { ok: true, id, title: titleMatch?.[1]?.trim() ?? '', markdown: parsed, meta: { created: undefined } });
+        const facts = observationFacts(parsed);
+        json(res, 200, {
+          ok: true,
+          id,
+          title: facts.title,
+          type: facts.type,
+          createdAt: facts.createdAt,
+          sessionId: facts.sessionId,
+          scope: facts.scope,
+          topic: facts.topic,
+          markdown: facts.body,
+          meta: { created: undefined },
+        });
+        return;
+      }
+      case '/v1/stats': {
+        const ctx = contexts.get(String(body.contextId ?? ''));
+        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        const project = typeof body.project === 'string' ? body.project : undefined;
+        const r = await toolCall(ctx, 'mem_list_projects', project ? { project } : {});
+        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        const parsed = JSON.parse(r.text!) as { projects?: { name: string; observation_count: number; session_count: number; prompt_count: number; directories: string[] }[]; count: number };
+        const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+        const target = project ? projects.find((p) => p.name.toLowerCase() === project.toLowerCase()) : (projects[0] ?? null);
+        json(res, 200, { ok: true, stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null });
         return;
       }
       case '/v1/disconnect': {

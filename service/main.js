@@ -1,3 +1,22 @@
+import { createRequire } from "node:module";
+var __create = Object.create;
+var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __toESM = (mod, isNodeMode, target) => {
+  target = mod != null ? __create(__getProtoOf(mod)) : {};
+  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  for (let key of __getOwnPropNames(mod))
+    if (!__hasOwnProp.call(to, key))
+      __defProp(to, key, {
+        get: () => mod[key],
+        enumerable: true
+      });
+  return to;
+};
+var __require = /* @__PURE__ */ createRequire(import.meta.url);
+
 // service/main.ts
 import http from "node:http";
 import { spawn, execFile } from "node:child_process";
@@ -14,7 +33,7 @@ var ALLOWED_TOOLS = new Set([
   "mem_context",
   "mem_search",
   "mem_get_observation",
-  "mem_timeline",
+  "mem_search_prompts",
   "mem_stats"
 ]);
 var ENGRAM_FLOOR = [3, 4];
@@ -23,6 +42,7 @@ var CONTEXT_IDLE_MS = 60000;
 var MCP_CALL_TIMEOUT_MS = 8000;
 var MAX_CONTEXTS = 2;
 var contexts = new Map;
+var sessionExportCache = new Map;
 var json = (res, status, body) => {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
@@ -87,7 +107,7 @@ async function initializeMcp(ctx) {
   await sendMcp(ctx, "initialize", {
     protocolVersion: "2024-11-05",
     capabilities: {},
-    clientInfo: { name: "openchamber-engram", version: "0.4.0" }
+    clientInfo: { name: "openchamber-engram", version: "0.3.0" }
   });
   await notify(ctx, "notifications/initialized");
   const tools = await sendMcp(ctx, "tools/list", {});
@@ -231,6 +251,89 @@ function projectOfDetail(text) {
   }
   return null;
 }
+function observationFacts(parsed) {
+  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
+  const meta = {};
+  const lines = parsed.split(`
+`);
+  let i = lines.length;
+  while (i > 0) {
+    const line = lines[i - 1].trim();
+    if (!line) {
+      i -= 1;
+      continue;
+    }
+    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
+    if (!m)
+      break;
+    meta[m[1]] = m[2].trim();
+    i -= 1;
+  }
+  const bodyLines = lines.slice(0, i);
+  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
+    bodyLines.shift();
+  }
+  return {
+    title: (headerMatch?.[2] ?? "").trim(),
+    type: (headerMatch?.[1] ?? "").trim(),
+    createdAt: meta.Created ?? null,
+    sessionId: meta.Session ?? null,
+    scope: meta.Scope ?? null,
+    topic: meta.Topic ?? null,
+    body: bodyLines.join(`
+`).trim()
+  };
+}
+async function exportProject(ctx, project) {
+  const cacheKey = `${ctx.id}:${project}`;
+  const now = Date.now();
+  const cached = sessionExportCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return { ok: true, data: cached.data };
+  }
+  const tmpFile = `/tmp/opencode/engram-export-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`;
+  try {
+    const result = await new Promise((resolve) => {
+      const env = { ...process.env };
+      if (ctx.dataDir)
+        env.ENGRAM_DATA_DIR = ctx.dataDir;
+      if (ctx.projectOverride)
+        env.ENGRAM_PROJECT = ctx.projectOverride;
+      let stdout = "";
+      let stderr = "";
+      const proc = spawn(ctx.executable, ["export", tmpFile, "--project", project], { cwd: ctx.directory, env, shell: false });
+      proc.stdout.on("data", (d) => {
+        stdout += d;
+      });
+      proc.stderr.on("data", (d) => {
+        stderr += d;
+      });
+      proc.on("close", (code) => resolve({ stdout, stderr, code }));
+      proc.on("error", (err) => resolve({ stdout, stderr, code: -1 }));
+      setTimeout(() => {
+        proc.kill("SIGTERM");
+        resolve({ stdout, stderr, code: -1 });
+      }, 8000);
+    });
+    if (result.code !== 0) {
+      sessionExportCache.delete(cacheKey);
+      return { ok: false, code: result.stderr.includes("not found") ? "not-found" : "read-failed" };
+    }
+    const raw = await new Promise((resolve, reject) => {
+      import("node:fs").then(({ readFile }) => {
+        readFile(tmpFile, "utf8", (err, data2) => err ? reject(err) : resolve(data2));
+      }).catch(reject);
+    });
+    const data = JSON.parse(raw);
+    sessionExportCache.set(cacheKey, { project, data, expiresAt: now + 30000 });
+    return { ok: true, data };
+  } catch (err) {
+    sessionExportCache.delete(cacheKey);
+    return { ok: false, code: err instanceof Error ? err.message : String(err) };
+  } finally {
+    import("node:fs").then(({ unlink }) => unlink(tmpFile, () => {})).catch(() => {});
+  }
+}
 var server = http.createServer(async (req, res) => {
   if (req.headers.authorization !== `Bearer ${token}`) {
     json(res, 401, { error: "unauthorized" });
@@ -287,8 +390,8 @@ var server = http.createServer(async (req, res) => {
         if (!project && !candidates.length) {
           const pl = await toolCall(ctx, "mem_list_projects", {});
           if (pl.text) {
-            const { envelope } = parseEnvelope(pl.text);
-            candidates = envelope?.projects?.map((p) => p.name) ?? candidates;
+            const parsed = JSON.parse(pl.text);
+            candidates = (parsed.projects ?? []).map((p) => p.name);
           }
         }
         const projectStatus = project && projectSource !== "ambiguous" ? "resolved" : candidates.length ? "ambiguous" : "unknown";
@@ -306,24 +409,193 @@ var server = http.createServer(async (req, res) => {
         });
         return;
       }
-      case "/v1/recent": {
+      case "/v1/observations": {
         const ctx = contexts.get(String(body.contextId ?? ""));
         if (!ctx) {
           json(res, 200, { ok: false, code: "no-context" });
           return;
         }
         const project = typeof body.project === "string" ? body.project : undefined;
-        const r = await toolCall(ctx, "mem_context", {
-          ...project ? { project } : {},
-          max_bytes: 16384,
-          compact: true
+        if (!project) {
+          json(res, 200, { ok: false, code: "missing-project" });
+          return;
+        }
+        const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
+        const r = await toolCall(ctx, "mem_search", {
+          query: project,
+          project,
+          limit,
+          response_format: "compact",
+          match_mode: "all"
         });
         if (r.error) {
           json(res, 200, { ok: false, code: "read-failed", message: r.error });
           return;
         }
         const { envelope, parsed } = parseEnvelope(r.text);
-        json(res, 200, { ok: true, document: parsed, envelopeProject: envelope?.project ?? null });
+        const results = Array.isArray(envelope?.results) ? envelope.results : [];
+        results.sort((a, b) => {
+          const at = String(a.created_at ?? "");
+          const bt = String(b.created_at ?? "");
+          return bt.localeCompare(at);
+        });
+        const message = parsed.trim();
+        json(res, 200, {
+          ok: true,
+          hits: results.map((row) => ({
+            id: row.id,
+            title: row.title,
+            type: row.type,
+            preview: row.preview,
+            truncated: row.truncated,
+            scope: row.scope,
+            createdAt: row.created_at
+          })),
+          note: message && results.length === 0 ? message : undefined
+        });
+        return;
+      }
+      case "/v1/sessions": {
+        const ctx = contexts.get(String(body.contextId ?? ""));
+        if (!ctx) {
+          json(res, 200, { ok: false, code: "no-context" });
+          return;
+        }
+        const project = typeof body.project === "string" ? body.project : undefined;
+        if (!project) {
+          json(res, 200, { ok: false, code: "missing-project" });
+          return;
+        }
+        const exp = await exportProject(ctx, project);
+        if (!exp.ok) {
+          json(res, 200, { ok: false, code: exp.code ?? "read-failed" });
+          return;
+        }
+        const sessions = [];
+        const sessionsMap = new Map;
+        for (const s of exp.data.sessions || []) {
+          sessionsMap.set(s.id, { ...s, observationCount: 0, promptCount: 0 });
+        }
+        for (const o of exp.data.observations || []) {
+          const sid = o.session_id;
+          if (sessionsMap.has(sid))
+            sessionsMap.get(sid).observationCount++;
+        }
+        for (const p of exp.data.prompts || []) {
+          const sid = p.session_id;
+          if (sessionsMap.has(sid))
+            sessionsMap.get(sid).promptCount++;
+        }
+        for (const s of sessionsMap.values()) {
+          sessions.push({
+            id: s.id,
+            startedAt: s.started_at,
+            endedAt: s.ended_at ?? null,
+            summary: s.summary ?? "",
+            directory: s.directory ?? "",
+            observationCount: s.observationCount,
+            promptCount: s.promptCount
+          });
+        }
+        sessions.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
+        json(res, 200, { ok: true, sessions });
+        return;
+      }
+      case "/v1/sessionDetail": {
+        const ctx = contexts.get(String(body.contextId ?? ""));
+        if (!ctx) {
+          json(res, 200, { ok: false, code: "no-context" });
+          return;
+        }
+        const project = typeof body.project === "string" ? body.project : undefined;
+        const sessionId = String(body.sessionId ?? "");
+        if (!project || !sessionId) {
+          json(res, 200, { ok: false, code: "missing-project-or-session" });
+          return;
+        }
+        const exp = await exportProject(ctx, project);
+        if (!exp.ok) {
+          json(res, 200, { ok: false, code: exp.code ?? "read-failed" });
+          return;
+        }
+        const session = (exp.data.sessions || []).find((s) => s.id === sessionId);
+        if (!session) {
+          json(res, 200, { ok: false, code: "unknown-session" });
+          return;
+        }
+        const sessionProject = session.project ?? "";
+        if (sessionProject !== project) {
+          json(res, 200, { ok: false, code: "project-mismatch" });
+          return;
+        }
+        const obs = (exp.data.observations || []).filter((o) => o.session_id === sessionId && !o.deleted_at).map((o) => ({
+          id: o.id,
+          title: o.title,
+          type: o.type,
+          preview: o.content ? o.content.substring(0, 300).trim() : "",
+          createdAt: o.created_at
+        })).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).slice(0, 50);
+        const prompts = (exp.data.prompts || []).filter((p) => p.session_id === sessionId).map((p) => ({
+          id: p.id,
+          content: p.content,
+          createdAt: p.created_at,
+          sessionId: p.session_id
+        })).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).slice(0, 50);
+        json(res, 200, {
+          ok: true,
+          session: {
+            id: session.id,
+            startedAt: session.started_at,
+            endedAt: session.ended_at ?? null,
+            summary: session.summary ?? "",
+            directory: session.directory ?? "",
+            project: session.project ?? ""
+          },
+          observations: obs,
+          prompts
+        });
+        return;
+      }
+      case "/v1/prompts": {
+        const ctx = contexts.get(String(body.contextId ?? ""));
+        if (!ctx) {
+          json(res, 200, { ok: false, code: "no-context" });
+          return;
+        }
+        const project = typeof body.project === "string" ? body.project : undefined;
+        if (!project) {
+          json(res, 200, { ok: false, code: "missing-project" });
+          return;
+        }
+        const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
+        const r = await toolCall(ctx, "mem_search_prompts", {
+          query: project,
+          project,
+          limit
+        });
+        if (r.error) {
+          json(res, 200, { ok: false, code: "read-failed", message: r.error });
+          return;
+        }
+        const { envelope, parsed } = parseEnvelope(r.text);
+        const results = Array.isArray(envelope?.results) ? envelope.results : [];
+        results.sort((a, b) => {
+          const at = String(a.created_at ?? "");
+          const bt = String(b.created_at ?? "");
+          return bt.localeCompare(at);
+        });
+        const message = parsed.trim();
+        json(res, 200, {
+          ok: true,
+          hits: results.map((row) => ({
+            id: row.id,
+            content: row.content,
+            preview: typeof row.content === "string" ? row.content.substring(0, 200).trim() : "",
+            createdAt: row.created_at,
+            sessionId: row.session_id
+          })),
+          note: message && results.length === 0 ? message : undefined
+        });
         return;
       }
       case "/v1/search": {
@@ -391,8 +663,37 @@ var server = http.createServer(async (req, res) => {
           json(res, 200, { ok: false, code: "project-mismatch" });
           return;
         }
-        const titleMatch = /^#[0-9]+\s*([^\n]*)/.exec(parsed.trim());
-        json(res, 200, { ok: true, id, title: titleMatch?.[1]?.trim() ?? "", markdown: parsed, meta: { created: undefined } });
+        const facts = observationFacts(parsed);
+        json(res, 200, {
+          ok: true,
+          id,
+          title: facts.title,
+          type: facts.type,
+          createdAt: facts.createdAt,
+          sessionId: facts.sessionId,
+          scope: facts.scope,
+          topic: facts.topic,
+          markdown: facts.body,
+          meta: { created: undefined }
+        });
+        return;
+      }
+      case "/v1/stats": {
+        const ctx = contexts.get(String(body.contextId ?? ""));
+        if (!ctx) {
+          json(res, 200, { ok: false, code: "no-context" });
+          return;
+        }
+        const project = typeof body.project === "string" ? body.project : undefined;
+        const r = await toolCall(ctx, "mem_list_projects", project ? { project } : {});
+        if (r.error) {
+          json(res, 200, { ok: false, code: "read-failed", message: r.error });
+          return;
+        }
+        const parsed = JSON.parse(r.text);
+        const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+        const target = project ? projects.find((p) => p.name.toLowerCase() === project.toLowerCase()) : projects[0] ?? null;
+        json(res, 200, { ok: true, stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null });
         return;
       }
       case "/v1/disconnect": {
