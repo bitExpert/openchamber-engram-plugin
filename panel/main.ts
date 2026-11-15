@@ -1,5 +1,5 @@
 import { connectHost, type GuestRequestMethod, type JsonValue } from '@openchamber/sdk';
-import { applyHostReady, mountBadge, mountButton, mountList, mountSearchField, mountSelect, mountSeparator, type Tone } from '@openchamber/sdk/ui';
+import { applyHostReady, mountBadge, mountButton, mountList, mountSearchField, mountSelect, mountSeparator, mountTabs, type TabItem, type Tone } from '@openchamber/sdk/ui';
 import { renderMarkdownInto } from './markdown';
 
 const host = connectHost();
@@ -53,10 +53,11 @@ interface SearchHit {
   scope: string;
 }
 
-interface ProjectStats {
-  sessions: number;
-  observations: number;
-  prompts: number;
+interface PromptHit {
+  id: number;
+  content: string;
+  preview: string;
+  createdAt: string;
 }
 
 const STORAGE_KEY = 'config/v1';
@@ -69,6 +70,7 @@ let broad = true;
 let limit = 20;
 let currentAllContextId: string | null = null;
 let stats: ProjectStats | null = null;
+let currentTab: string = 'observations';
 // Render token: every view render captures the current value and abandons
 // after any await when a newer render has started. Without it, overlapping
 // renders (search keystrokes, directory changes, reconnects) each cleared
@@ -220,14 +222,159 @@ async function renderRecent(): Promise<void> {
     if (seq !== renderSeq) return;
     renderStatsGrid(viewRoot);
   }
-  const doc = el('div', viewRoot);
-  const result = await callService<{ ok: boolean; code?: string; document?: string }>('POST', '/v1/recent', { contextId: state.contextId, project: state.project || undefined });
+
+  if (seq !== renderSeq) return;
+
+  // Tabs UI
+  const tabsSection = el('div', viewRoot, 'tabs-section');
+  const tabsContainer = el('div', tabsSection);
+  const tabsItems: TabItem[] = [
+    { id: 'observations', label: 'Observations', count: stats?.observations },
+    { id: 'sessions', label: 'Sessions', count: stats?.sessions },
+    { id: 'prompts', label: 'Prompts', count: stats?.prompts },
+  ];
+  const tabsHandle = mountTabs(tabsContainer, {
+    items: tabsItems,
+    activeId: currentTab,
+    onChange: (id) => {
+      currentTab = id;
+      tabsHandle.update({ activeId: id });
+      renderTab();
+    },
+  });
+
+  const contentContainer = el('div', tabsSection, 'tab-content');
+  renderTabContent(contentContainer);
+}
+
+function renderTab(): void {
+  if (!state || state.projectStatus !== 'resolved') return;
+  const tabContent = viewRoot.querySelector('.tab-content');
+  if (!tabContent) return;
+  tabContent.textContent = '';
+  renderTabContent(tabContent);
+}
+
+async function renderTabContent(container: HTMLElement): Promise<void> {
+  if (currentTab === 'observations') {
+    await renderObservationsTab(container);
+  } else if (currentTab === 'sessions') {
+    await renderSessionsTab(container);
+  } else if (currentTab === 'prompts') {
+    await renderPromptsTab(container);
+  }
+}
+
+async function renderObservationsTab(container: HTMLElement): Promise<void> {
+  if (!state) return;
+  const seq = ++renderSeq;
+  statusNote.textContent = '';
+  const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>('POST', '/v1/observations', {
+    contextId: state.contextId,
+    project: state.project || undefined,
+    limit,
+  });
   if (seq !== renderSeq) return;
   if (!result.ok) {
-    statusNote.textContent = `Recent unavailable: ${result.code ?? 'unknown'}`;
+    statusNote.textContent = `Observations unavailable: ${result.code ?? 'unknown'}`;
     return;
   }
+  if (result.note) {
+    const note = el('p', container, 'note');
+    note.textContent = result.note;
+    return;
+  }
+  const hits = result.hits ?? [];
+  if (!hits.length) {
+    const note = el('p', container, 'note');
+    note.textContent = 'No observations found.';
+    return;
+  }
+  mountList(container, {
+    items: hits.map((h) => ({
+      id: String(h.id),
+      title: h.title,
+      subtitle: h.preview,
+      leading: h.type,
+      meta: h.scope,
+    })),
+    onSelect: (id) => void showDetail(Number(id)),
+  });
+}
+
+async function renderSessionsTab(container: HTMLElement): Promise<void> {
+  if (!state) return;
+  const seq = ++renderSeq;
+  statusNote.textContent = '';
+  const result = await callService<{ ok: boolean; code?: string; document?: string }>('POST', '/v1/sessions', {
+    contextId: state.contextId,
+    project: state.project || undefined,
+  });
+  if (seq !== renderSeq) return;
+  if (!result.ok) {
+    statusNote.textContent = `Sessions unavailable: ${result.code ?? 'unknown'}`;
+    return;
+  }
+  const doc = el('div', container);
   renderMarkdownInto(doc, result.document ?? '', (url) => void host.openUrl(url));
+}
+
+async function renderPromptsTab(container: HTMLElement): Promise<void> {
+  if (!state) return;
+  const seq = ++renderSeq;
+  statusNote.textContent = '';
+  const result = await callService<{ ok: boolean; code?: string; hits?: PromptHit[]; note?: string }>('POST', '/v1/prompts', {
+    contextId: state.contextId,
+    project: state.project || undefined,
+    limit,
+  });
+  if (seq !== renderSeq) return;
+  if (!result.ok) {
+    statusNote.textContent = `Prompts unavailable: ${result.code ?? 'unknown'}`;
+    return;
+  }
+  if (result.note) {
+    const note = el('p', container, 'note');
+    note.textContent = result.note;
+    return;
+  }
+  const hits = result.hits ?? [];
+  if (!hits.length) {
+    const note = el('p', container, 'note');
+    note.textContent = 'No prompts found.';
+    return;
+  }
+  mountList(container, {
+    items: hits.map((h) => ({
+      id: String(h.id),
+      title: h.preview.split('\n')[0] || `Prompt #${h.id}`,
+      subtitle: h.preview,
+      meta: h.createdAt,
+    })),
+    onSelect: (id) => {
+      const hit = hits.find((h) => String(h.id) === id);
+      if (hit) void showPromptDetail(hit);
+    },
+  });
+}
+
+function showPromptDetail(hit: PromptHit): void {
+  if (!state || state.projectStatus !== 'resolved') return;
+  renderSeq++;
+  viewRoot.textContent = '';
+  const back = el('div', viewRoot, 'actions');
+  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { if (query.trim()) void doSearch(); else void renderRecent(); } });
+  const title = el('h3', viewRoot);
+  title.textContent = hit.createdAt ? new Date(hit.createdAt).toLocaleString() : `Prompt #${hit.id}`;
+  const body = el('div', viewRoot);
+  renderMarkdownInto(body, hit.content, (url) => void host.openUrl(url));
+  const actions = el('div', viewRoot, 'actions');
+  mountButton(actions, { label: 'Copy prompt', size: 'sm', onClick: () => { void host.writeClipboard(hit.content); setBadge('Copied', 'success'); setTimeout(() => setBadge('Ready', 'success'), 1500); } });
+  const detailState = state;
+  mountButton(actions, { label: 'Insert into chat', size: 'sm', variant: 'secondary', onClick: () => {
+    const text = `### ${hit.createdAt ?? `Prompt #${hit.id}`} (project: ${detailState?.project})\n${hit.content}`;
+    void host.compose({ text, mode: 'append' }).then(() => setBadge('Inserted', 'success')).catch(() => setBadge('Insert failed', 'error'));
+  } });
 }
 
 async function doSearch(): Promise<void> {
@@ -307,7 +454,7 @@ function renderSetup(): void {
   note.textContent = 'Open the extension settings to change the executable, data directory, and project mapping.';
 }
 
-function sourceLabel(source: string): string {
+function projectLabel(source: string): string {
   switch (source) {
     case 'process_override':
     case 'explicit_override': return 'explicit override';

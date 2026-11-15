@@ -1,34 +1,5 @@
-import MarkdownIt from 'markdown-it';
+import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true,
-});
-
-md.validateLink = (url: string): boolean => {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
-
-// OpenChamber >= 2.0.4 serves extension pages under a policy that keeps them
-// off the network, so a remote `<img>` never loads. Render images as links
-// instead; `renderMarkdownInto` routes the click through `host.openUrl`.
-const escapeHtml = (value: string): string =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-md.renderer.rules.image = (tokens, idx) => {
-  const token = tokens[idx];
-  const src = String(token.attrGet('src') ?? '');
-  const alt = (token.children ?? []).map((child) => child.content).join('').trim();
-  const label = alt || src;
-  return `<a href="${escapeHtml(src)}" title="${escapeHtml(alt)}">image: ${escapeHtml(label)}</a>`;
-};
 
 const ALLOWED_TAGS = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
@@ -49,8 +20,25 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
+const escapeHtml = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// Override image rendering to show remote images as links (ADR-0012)
+// breaks: true restores markdown-it behavior — single newlines become <br>,
+// which matters for Engram's mem_save template (single-newline sections).
+marked.use({
+  breaks: true,
+  renderer: {
+    image(href: string, title: string, text: string): string {
+      const label = text || href;
+      const safeTitle = escapeHtml(title || '');
+      return `<a href="${escapeHtml(href)}" title="${safeTitle}">image: ${escapeHtml(label)}</a>`;
+    },
+  },
+});
+
 export function renderMarkdown(source: string): string {
-  const rendered = md.render(source);
+  const rendered = marked.parse(source);
   return DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,

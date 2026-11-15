@@ -16,7 +16,7 @@ const ALLOWED_TOOLS = new Set([
   'mem_context',
   'mem_search',
   'mem_get_observation',
-  'mem_timeline',
+  'mem_search_prompts',
   'mem_stats',
 ]);
 
@@ -308,18 +308,101 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
-      case '/v1/recent': {
+      case '/v1/observations': {
+        const ctx = contexts.get(String(body.contextId ?? ''));
+        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        const project = typeof body.project === 'string' ? body.project : undefined;
+        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+        const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
+        // Use project name as query — every row matches via its project column.
+        // LIKE path (short term) or FTS both include project in the disjunction,
+        // so querying the project name itself returns all rows of that project.
+        // Re-sort by created_at DESC before returning (FTS returns BM25 relevance order).
+        const r = await toolCall(ctx, 'mem_search', {
+          query: project,
+          project,
+          limit,
+          response_format: 'compact',
+          match_mode: 'all',
+        });
+        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        const { envelope, parsed } = parseEnvelope(r.text!);
+        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
+        // Sort by created_at DESC (most recent first)
+        results.sort((a, b) => {
+          const at = a.created_at ?? '';
+          const bt = b.created_at ?? '';
+          return bt.localeCompare(at);
+        });
+        const message = parsed.trim();
+        json(res, 200, {
+          ok: true,
+          hits: results.map((row) => ({
+            id: row.id,
+            title: row.title,
+            type: row.type,
+            preview: row.preview,
+            truncated: row.truncated,
+            scope: row.scope,
+            createdAt: row.created_at,
+          })),
+          note: message && results.length === 0 ? message : undefined,
+        });
+        return;
+      }
+      case '/v1/sessions': {
         const ctx = contexts.get(String(body.contextId ?? ''));
         if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
         const project = typeof body.project === 'string' ? body.project : undefined;
         const r = await toolCall(ctx, 'mem_context', {
           ...(project ? { project } : {}),
-          max_bytes: 16_384,
+          max_bytes: 8192,
           compact: true,
         });
         if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
         const { envelope, parsed } = parseEnvelope(r.text!);
-        json(res, 200, { ok: true, document: parsed, envelopeProject: envelope?.project ?? null });
+        // Extract sessions section only
+        const sessionMatches = parsed.match(/### Recent Sessions([\s\S]*?)(?=###|$)/);
+        const sessionsText = sessionMatches ? sessionMatches[1].trim() : '';
+        json(res, 200, { ok: true, document: sessionsText, envelopeProject: envelope?.project ?? null });
+        return;
+      }
+      case '/v1/prompts': {
+        const ctx = contexts.get(String(body.contextId ?? ''));
+        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        const project = typeof body.project === 'string' ? body.project : undefined;
+        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+        const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
+        // Use project name as query — every row matches via its project column.
+        // LIKE path (short term) or FTS both include project in the disjunction,
+        // so querying the project name itself returns all rows of that project.
+        // Re-sort by created_at DESC before returning (FTS returns BM25 relevance order).
+        const r = await toolCall(ctx, 'mem_search_prompts', {
+          query: project,
+          project,
+          limit,
+        });
+        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        const { envelope, parsed } = parseEnvelope(r.text!);
+        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
+        // Sort by created_at DESC (most recent first)
+        results.sort((a, b) => {
+          const at = a.created_at ?? '';
+          const bt = b.created_at ?? '';
+          return bt.localeCompare(at);
+        });
+        const message = parsed.trim();
+        json(res, 200, {
+          ok: true,
+          hits: results.map((row) => ({
+            id: row.id,
+            content: row.content,
+            preview: typeof row.content === 'string' ? row.content.substring(0, 200).trim() : '',
+            createdAt: row.created_at,
+            sessionId: row.session_id,
+          })),
+          note: message && results.length === 0 ? message : undefined,
+        });
         return;
       }
       case '/v1/search': {
