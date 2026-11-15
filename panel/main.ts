@@ -28,6 +28,12 @@ interface ConnectResult {
   required?: string;
 }
 
+interface ProjectStats {
+  sessions: number;
+  observations: number;
+  prompts: number;
+}
+
 interface ConnectState {
   contextId: string;
   project: string;
@@ -47,6 +53,12 @@ interface SearchHit {
   scope: string;
 }
 
+interface ProjectStats {
+  sessions: number;
+  observations: number;
+  prompts: number;
+}
+
 const STORAGE_KEY = 'config/v1';
 
 let config: Config = {};
@@ -56,6 +68,13 @@ let query = '';
 let broad = true;
 let limit = 20;
 let currentAllContextId: string | null = null;
+let stats: ProjectStats | null = null;
+// Render token: every view render captures the current value and abandons
+// after any await when a newer render has started. Without it, overlapping
+// renders (search keystrokes, directory changes, reconnects) each cleared
+// viewRoot first and then all appended their documents, painting the
+// context block several times over.
+let renderSeq = 0;
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, container: HTMLElement, className?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
@@ -105,7 +124,9 @@ async function callService<T>(method: GuestRequestMethod, path: string, body: Re
 }
 
 async function connect(): Promise<void> {
+  renderSeq++;
   viewRoot.textContent = '';
+  stats = null;
   setBadge('Connecting', 'neutral');
   setVersion(undefined);
   statusNote.textContent = 'Starting local service…';
@@ -152,18 +173,56 @@ async function connect(): Promise<void> {
   }
 }
 
+async function fetchStats(): Promise<void> {
+  if (!state || !state.contextId) { stats = null; return; }
+  try {
+    const result = await callService<{ ok: boolean; code?: string; stats?: ProjectStats }>('POST', '/v1/stats', {
+      contextId: state.contextId,
+      project: state.project || undefined,
+    });
+    stats = result.ok ? result.stats ?? null : null;
+  } catch {
+    stats = null;
+  }
+}
+
+function formatCount(value: number): string {
+  return value.toLocaleString();
+}
+
+function renderStatsGrid(container: HTMLElement): void {
+  const grid = el('div', container, 'stats-grid');
+  const tiles: { label: string; value: string }[] = [
+    { label: 'Sessions', value: stats ? formatCount(stats.sessions) : '—' },
+    { label: 'Observations', value: stats ? formatCount(stats.observations) : '—' },
+    { label: 'Prompts', value: stats ? formatCount(stats.prompts) : '—' },
+  ];
+  for (const tile of tiles) {
+    const node = el('div', grid, 'stat-tile');
+    const label = el('span', node, 'stat-label');
+    label.textContent = tile.label;
+    const value = el('span', node, 'stat-value');
+    value.textContent = tile.value;
+  }
+}
+
 function processDirectory(): string {
   return directory ?? '~';
 }
 
 async function renderRecent(): Promise<void> {
   if (!state) return;
+  const seq = ++renderSeq;
   viewRoot.textContent = '';
   renderProjectLine(viewRoot);
-  const heading = el('h3', viewRoot);
-  heading.textContent = 'Recent memories';
+  if (state.projectStatus === 'resolved') {
+    await fetchStats();
+    if (seq !== renderSeq) return;
+    renderStatsGrid(viewRoot);
+  }
   const doc = el('div', viewRoot);
   const result = await callService<{ ok: boolean; code?: string; document?: string }>('POST', '/v1/recent', { contextId: state.contextId, project: state.project || undefined });
+  if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Recent unavailable: ${result.code ?? 'unknown'}`;
     return;
@@ -175,6 +234,7 @@ async function doSearch(): Promise<void> {
   if (!state) return;
   if (state.projectStatus !== 'resolved') { renderProjectGate(); return; }
   if (!query.trim()) { void renderRecent(); return; }
+  const seq = ++renderSeq;
   viewRoot.textContent = '';
   const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>('POST', '/v1/search', {
     contextId: state.contextId,
@@ -183,6 +243,7 @@ async function doSearch(): Promise<void> {
     limit,
     project: state.project || undefined,
   });
+  if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Search failed: ${result.code ?? 'unknown'}`;
     return;
@@ -213,10 +274,12 @@ async function doSearch(): Promise<void> {
 
 async function showDetail(id: number): Promise<void> {
   if (!state || state.projectStatus !== 'resolved') return;
+  const seq = ++renderSeq;
   viewRoot.textContent = '';
   const back = el('div', viewRoot, 'actions');
   mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { if (query.trim()) void doSearch(); else void renderRecent(); } });
   const result = await callService<{ ok: boolean; code?: string; title?: string; markdown?: string }>('POST', '/v1/getMemory', { contextId: state.contextId, id, project: state.project || undefined });
+  if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Detail failed: ${result.code ?? 'unknown'}`;
     return;
@@ -236,6 +299,7 @@ async function showDetail(id: number): Promise<void> {
 
 function renderSetup(): void {
   if (!viewRoot) return;
+  renderSeq++;
   mountSeparator(viewRoot);
   const heading = el('h3', viewRoot);
   heading.textContent = 'Engram setup';
@@ -262,15 +326,11 @@ function renderProjectLine(container: HTMLElement): void {
   const line = el('div', container, 'project-line');
   const label = el('span', line, 'project-label');
   label.textContent = `Project: ${state.project}`;
-  const source = el('span', line, 'project-source');
-  source.textContent = sourceLabel(state.projectSource);
-  if (config.projectOverride) {
-    mountButton(line, { label: 'Clear override', variant: 'ghost', size: 'xs', onClick: () => { void applyProjectOverride(null); } });
-  }
 }
 
 function renderProjectGate(): void {
   if (!state) return;
+  renderSeq++;
   viewRoot.textContent = '';
   const heading = el('h3', viewRoot);
   heading.textContent = state.projectStatus === 'ambiguous' ? 'Choose a project' : 'Project not detected';

@@ -11,6 +11,7 @@ A read-only OpenChamber extension that browses and searches [Engram](https://git
 - **Detail** — full observation (`mem_get_observation`) rendered as sanitized HTML; Markdown headings, lists, tables, code, blockquotes, links, images.
 - **Copy / Insert** — copy the raw observation or insert it into the chat composer.
 - **Project bound** — the active project is resolved via `mem_current_project` (git remote, `.engram` config, or an explicit override) and shown at the top of the view; queries are project-scoped. When Engram cannot decide (multiple projects match, or a git/history conflict) the panel offers a project picker instead of guessing. Ownership is enforced service-side from the observation's `Project:` line; cross-project memories return a `project-mismatch` error.
+- **Project stats** — per-project sessions/observations/prompts shown as stat tiles in the content area, loaded automatically on connect (no manual refresh), pulled from `mem_list_projects` (Engram `>=3.4.0`).
 - **Version in the title bar** — the panel header shows the detected Engram version (`v3.4.0`); the extension requires Engram `>=3.4.0`.
 - **Read-only** — only read tools are exposed; nothing is ever written to the Engram store.
 
@@ -74,6 +75,7 @@ Loopback HTTP service, authenticated with `Authorization: Bearer <OPENCHAMBER_SE
 | ---------------- | ----------------------------------------- |
 | `/v1/connect`    | Spawn Engram, version check, resolve project (`project`, `projectStatus`, `projectPath`, `candidates`, `version`) |
 | `/v1/recent`     | Display-only `mem_context` document       |
+| `/v1/stats`      | Project-scoped stats (`sessions`, `observations`, `prompts`) |
 | `/v1/search`     | Project-scoped `mem_search` hits          |
 | `/v1/getMemory`  | Full observation Markdown for an id       |
 | `/v1/disconnect` | Kill the child and shut down              |

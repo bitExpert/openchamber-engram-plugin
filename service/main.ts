@@ -286,8 +286,8 @@ const server = http.createServer(async (req, res) => {
         if (!project && !candidates.length) {
           const pl = await toolCall(ctx, 'mem_list_projects', {});
           if (pl.text) {
-            const { envelope } = parseEnvelope(pl.text);
-            candidates = (envelope?.projects as { name: string }[] | undefined)?.map((p) => p.name) ?? candidates;
+            const parsed = JSON.parse(pl.text) as { projects?: { name: string }[]; count: number };
+            candidates = (parsed.projects ?? []).map((p) => p.name);
           }
         }
         // `mem_current_project` never errors on ambiguity: it returns project "" with
@@ -371,6 +371,18 @@ const server = http.createServer(async (req, res) => {
         }
         const titleMatch = /^#[0-9]+\s*([^\n]*)/.exec(parsed.trim());
         json(res, 200, { ok: true, id, title: titleMatch?.[1]?.trim() ?? '', markdown: parsed, meta: { created: undefined } });
+        return;
+      }
+      case '/v1/stats': {
+        const ctx = contexts.get(String(body.contextId ?? ''));
+        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        const project = typeof body.project === 'string' ? body.project : undefined;
+        const r = await toolCall(ctx, 'mem_list_projects', project ? { project } : {});
+        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        const parsed = JSON.parse(r.text!) as { projects?: { name: string; observation_count: number; session_count: number; prompt_count: number; directories: string[] }[]; count: number };
+        const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+        const target = project ? projects.find((p) => p.name.toLowerCase() === project.toLowerCase()) : (projects[0] ?? null);
+        json(res, 200, { ok: true, stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null });
         return;
       }
       case '/v1/disconnect': {

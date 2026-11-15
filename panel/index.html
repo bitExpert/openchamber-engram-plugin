@@ -34,6 +34,14 @@
       .content table { border-collapse: collapse; width: 100%; }
       .content :is(th, td) { border: 1px solid var(--ok-3, rgba(128,128,128,0.3)); padding: 4px 8px; text-align: left; }
       .content blockquote { border-left: 3px solid var(--ok-3, rgba(128,128,128,0.4)); margin-left: 0; padding-left: 10px; color: var(--ok-2, #888); }
+      /* Stat tiles mirror the app's UsageStatsView StatTile: a grid of elevated
+         cards with a hairline edge, micro muted label and a large tabular value.
+         Colors come from the host theme tokens the SDK writes onto the iframe
+         root, so tiles follow the running app's theme without any rebuild. */
+      .stats-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 2px 0 8px; }
+      .stat-tile { display: flex; min-width: 0; flex-direction: column; gap: 2px; border-radius: var(--radius, 9px); border: 1px solid color-mix(in srgb, var(--interactive-border, currentColor) 70%, transparent); background: var(--surface-elevated, transparent); padding: 10px 12px; }
+      .stat-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; line-height: 1.45; color: var(--surface-muted-foreground, gray); }
+      .stat-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.25rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--surface-foreground, inherit); }
     </style>
   </head>
   <body>
