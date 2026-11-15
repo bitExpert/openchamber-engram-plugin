@@ -235,6 +235,47 @@ function projectOfDetail(text: string): string | null {
   return null;
 }
 
+// Observation facts from a mem_get_observation result. The stored text is
+// "#<id> [<type>] <title>" followed by the content and a trailing
+// bookkeeping block ("Session:", "Project:", "Scope:", "Topic:",
+// "Duplicates:", "Revisions:", "Created:" — one per line). The detail card
+// shows these facts, so the body drops the header line and the block.
+function observationFacts(parsed: string): {
+  title: string;
+  type: string;
+  createdAt: string | null;
+  sessionId: string | null;
+  scope: string | null;
+  topic: string | null;
+  body: string;
+} {
+  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
+  const meta: Record<string, string> = {};
+  const lines = parsed.split('\n');
+  let i = lines.length;
+  while (i > 0) {
+    const line = lines[i - 1].trim();
+    if (!line) { i -= 1; continue; }
+    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
+    if (!m) break;
+    meta[m[1]] = m[2].trim();
+    i -= 1;
+  }
+  const bodyLines = lines.slice(0, i);
+  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
+    bodyLines.shift();
+  }
+  return {
+    title: (headerMatch?.[2] ?? '').trim(),
+    type: (headerMatch?.[1] ?? '').trim(),
+    createdAt: meta.Created ?? null,
+    sessionId: meta.Session ?? null,
+    scope: meta.Scope ?? null,
+    topic: meta.Topic ?? null,
+    body: bodyLines.join('\n').trim(),
+  };
+}
+
 async function exportProject(ctx: Context, project: string): Promise<{ ok: boolean; data?: any; code?: string }> {
   const cacheKey = `${ctx.id}:${project}`;
   const now = Date.now();
@@ -595,8 +636,19 @@ const server = http.createServer(async (req, res) => {
           json(res, 200, { ok: false, code: 'project-mismatch' });
           return;
         }
-        const titleMatch = /^#[0-9]+\s*([^\n]*)/.exec(parsed.trim());
-        json(res, 200, { ok: true, id, title: titleMatch?.[1]?.trim() ?? '', markdown: parsed, meta: { created: undefined } });
+        const facts = observationFacts(parsed);
+        json(res, 200, {
+          ok: true,
+          id,
+          title: facts.title,
+          type: facts.type,
+          createdAt: facts.createdAt,
+          sessionId: facts.sessionId,
+          scope: facts.scope,
+          topic: facts.topic,
+          markdown: facts.body,
+          meta: { created: undefined },
+        });
         return;
       }
       case '/v1/stats': {

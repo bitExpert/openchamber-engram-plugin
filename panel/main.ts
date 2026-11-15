@@ -251,7 +251,7 @@ async function renderRecent(): Promise<void> {
 
 function renderTab(): void {
   if (!state || state.projectStatus !== 'resolved') return;
-  const tabContent = viewRoot.querySelector('.tab-content');
+  const tabContent = viewRoot.querySelector<HTMLElement>('.tab-content');
   if (!tabContent) return;
   tabContent.textContent = '';
   renderTabContent(tabContent);
@@ -649,34 +649,54 @@ async function showDetail(id: number): Promise<void> {
   viewRoot.textContent = '';
   const back = el('div', viewRoot, 'actions');
   mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { goBack(); } });
-  const result = await callService<{ ok: boolean; code?: string; title?: string; markdown?: string }>('POST', '/v1/getMemory', { contextId: state.contextId, id, project: state.project || undefined });
+  const result = await callService<{ ok: boolean; code?: string; title?: string; type?: string; createdAt?: string | null; sessionId?: string | null; scope?: string | null; topic?: string | null; markdown?: string }>('POST', '/v1/getMemory', { contextId: state.contextId, id, project: state.project || undefined });
   if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Detail failed: ${result.code ?? 'unknown'}`;
     return;
   }
-  // Card: title (from memory title), observation badge, meta (Project, Memory #id), divider, then Markdown inside card
+  // Card: title, badge (observation type), meta rows (Created, Project, Memory #id, Session), matching session/prompt detail pages
   const card = el('div', viewRoot, 'detail-card');
   const head = el('div', card, 'detail-head');
-  const titleText = result.title ?? `Memory #${id}`;
   const h3 = el('h3', head, 'detail-title');
-  h3.textContent = titleText;
-  mountBadge(head, { label: 'observation', tone: 'neutral' });
+  h3.textContent = result.title || `Memory #${id}`;
+  mountBadge(head, { label: result.type || 'observation', tone: 'neutral' });
   const meta = el('div', card, 'detail-meta');
-  const metaRows: Array<[string, string]> = [
+  const metaRows: Array<[string, string | HTMLElement]> = [
+    ['Created', result.createdAt ? new Date(result.createdAt).toLocaleString() : '—'],
     ['Project', state.project || '—'],
     ['Memory', `#${id}`],
   ];
+  if (result.sessionId) {
+    const sessionLink = el('a', meta, 'detail-meta-value');
+    sessionLink.href = '#';
+    sessionLink.textContent = 'Session';
+    sessionLink.onclick = () => {
+      backTarget = { restore: 'list' };
+      void showSessionDetail(result.sessionId!);
+    };
+    metaRows.push(['Session', sessionLink]);
+  } else {
+    metaRows.push(['Session', '—']);
+  }
   for (const [key, value] of metaRows) {
     const k = el('span', meta, 'detail-meta-key');
     k.textContent = key;
-    const v = el('span', meta, 'detail-meta-value');
-    v.textContent = value;
+    if (typeof value === 'string') {
+      const v = el('span', meta, 'detail-meta-value');
+      v.textContent = value;
+    } else {
+      (value as HTMLElement).className = 'detail-meta-value';
+      meta.appendChild(value);
+    }
   }
-  // Divider below card, then Markdown body inside card
-  const divider = el('hr', card, 'detail-divider');
+  // Divider below card, then section below for content (matches prompt detail page)
+  const divider = el('hr', viewRoot, 'detail-divider');
   void divider;
-  const body = el('div', card);
+  const section = el('div', viewRoot, 'section');
+  const sectionHeading = el('h4', section, 'section-heading');
+  sectionHeading.textContent = 'Observation';
+  const body = el('div', section);
   renderMarkdownInto(body, result.markdown ?? '', (url) => void host.openUrl(url));
   const actions = el('div', viewRoot, 'actions');
   mountButton(actions, { label: 'Copy Markdown', size: 'sm', onClick: () => { void host.writeClipboard(result.markdown ?? ''); setBadge('Copied', 'success'); setTimeout(() => setBadge('Ready', 'success'), 1500); } });

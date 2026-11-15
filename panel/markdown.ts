@@ -1,4 +1,4 @@
-import { marked } from 'marked';
+import { marked, Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 
 const ALLOWED_TAGS = [
@@ -26,10 +26,13 @@ const escapeHtml = (value: string): string =>
 // Override image rendering to show remote images as links (ADR-0012)
 // breaks: true restores markdown-it behavior — single newlines become <br>,
 // which matters for Engram's mem_save template (single-newline sections).
+// useNewRenderer: true switches marked v13 to the object-style renderer
+// signature (token instead of positional args) that the types expect.
 marked.use({
   breaks: true,
+  useNewRenderer: true,
   renderer: {
-    image(href: string, title: string, text: string): string {
+    image({ href, title, text }: Tokens.Image): string {
       const label = text || href;
       const safeTitle = escapeHtml(title || '');
       return `<a href="${escapeHtml(href)}" title="${safeTitle}">image: ${escapeHtml(label)}</a>`;
@@ -38,7 +41,9 @@ marked.use({
 });
 
 export function renderMarkdown(source: string): string {
-  const rendered = marked.parse(source);
+  // Synchronous parse: no extension on this instance is async, so the union
+  // collapses to string at runtime. Cast narrows the marked v13 return type.
+  const rendered = marked.parse(source) as string;
   return DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,

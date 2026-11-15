@@ -251,6 +251,39 @@ function projectOfDetail(text) {
   }
   return null;
 }
+function observationFacts(parsed) {
+  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
+  const meta = {};
+  const lines = parsed.split(`
+`);
+  let i = lines.length;
+  while (i > 0) {
+    const line = lines[i - 1].trim();
+    if (!line) {
+      i -= 1;
+      continue;
+    }
+    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
+    if (!m)
+      break;
+    meta[m[1]] = m[2].trim();
+    i -= 1;
+  }
+  const bodyLines = lines.slice(0, i);
+  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
+    bodyLines.shift();
+  }
+  return {
+    title: (headerMatch?.[2] ?? "").trim(),
+    type: (headerMatch?.[1] ?? "").trim(),
+    createdAt: meta.Created ?? null,
+    sessionId: meta.Session ?? null,
+    scope: meta.Scope ?? null,
+    topic: meta.Topic ?? null,
+    body: bodyLines.join(`
+`).trim()
+  };
+}
 async function exportProject(ctx, project) {
   const cacheKey = `${ctx.id}:${project}`;
   const now = Date.now();
@@ -630,8 +663,19 @@ var server = http.createServer(async (req, res) => {
           json(res, 200, { ok: false, code: "project-mismatch" });
           return;
         }
-        const titleMatch = /^#[0-9]+\s*([^\n]*)/.exec(parsed.trim());
-        json(res, 200, { ok: true, id, title: titleMatch?.[1]?.trim() ?? "", markdown: parsed, meta: { created: undefined } });
+        const facts = observationFacts(parsed);
+        json(res, 200, {
+          ok: true,
+          id,
+          title: facts.title,
+          type: facts.type,
+          createdAt: facts.createdAt,
+          sessionId: facts.sessionId,
+          scope: facts.scope,
+          topic: facts.topic,
+          markdown: facts.body,
+          meta: { created: undefined }
+        });
         return;
       }
       case "/v1/stats": {
