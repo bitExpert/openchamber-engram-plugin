@@ -1,7 +1,24 @@
 import type { ChildProcess } from 'node:child_process';
 import { execFile, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import http from 'node:http';
+
+import {
+  ALLOWED_TOOLS,
+  contextId,
+  ENGRAM_FLOOR_LABEL,
+  meetsFloor,
+  observationFacts,
+  ownershipMismatch,
+  type ProjectStatsRow,
+  parseEnvelope,
+  parseVersion,
+  projectOfDetail,
+  projectStatusFor,
+  type SpawnConfig,
+  selectStatsTarget,
+  sortByCreatedAtDesc,
+  spawnKey,
+} from './lib';
 
 const port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
 const token = process.env.OPENCHAMBER_SERVICE_TOKEN ?? '';
@@ -10,18 +27,6 @@ if (!port || !token) {
   process.exit(1);
 }
 
-const ALLOWED_TOOLS = new Set([
-  'mem_current_project',
-  'mem_list_projects',
-  'mem_context',
-  'mem_search',
-  'mem_get_observation',
-  'mem_search_prompts',
-  'mem_stats',
-]);
-
-const ENGRAM_FLOOR = [3, 4];
-const ENGRAM_FLOOR_LABEL = `${ENGRAM_FLOOR[0]}.${ENGRAM_FLOOR[1]}.0`;
 const CONTEXT_IDLE_MS = 60_000;
 const MCP_CALL_TIMEOUT_MS = 8_000;
 const MAX_CONTEXTS = 2;
@@ -68,19 +73,6 @@ function readBody(req: http.IncomingMessage): Promise<unknown> {
   });
 }
 
-function parseVersion(raw: string): [number, number] | null {
-  const m = /engram\s+(\d+)\.(\d+)\.(\d+)/.exec(raw.trim());
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2])];
-}
-
-function meetsFloor(v: [number, number] | null): boolean {
-  if (!v) return false;
-  if (v[0] > ENGRAM_FLOOR[0]) return true;
-  if (v[0] === ENGRAM_FLOOR[0] && v[1] >= ENGRAM_FLOOR[1]) return true;
-  return false;
-}
-
 function sendMcp(
   ctx: Context,
   method: string,
@@ -123,26 +115,7 @@ async function initializeMcp(ctx: Context): Promise<void> {
   if (missing.length) throw new Error(`unsupported-engram`);
 }
 
-function contextId(directory: string, configKey: string): string {
-  return createHash('sha1').update(`${directory}\0${configKey}`).digest('hex').slice(0, 16);
-}
-
-// Every field that changes how the Engram child is spawned must appear here, so a
-// changed project mapping (or executable / data dir) gets its own child process.
-// The previous expression relied on `??` binding looser than `+`, which dropped
-// dataDir/projectOverride whenever an executable was configured.
-function spawnKey(config: { executable?: string; dataDir?: string | null; projectOverride?: string | null }): string {
-  return JSON.stringify({
-    executable: config.executable ?? 'engram',
-    dataDir: config.dataDir ?? null,
-    projectOverride: config.projectOverride ?? null,
-  });
-}
-
-function spawnContext(
-  config: { executable?: string; dataDir?: string | null; projectOverride?: string | null },
-  directory: string,
-): Promise<Context> {
+function spawnContext(config: SpawnConfig, directory: string): Promise<Context> {
   const id = contextId(directory, spawnKey(config));
   if (contexts.size >= MAX_CONTEXTS && !contexts.has(id)) {
     return Promise.reject(new Error('context-limit'));
@@ -250,67 +223,6 @@ async function toolCall(
   const content = (result.result as { content?: { type: string; text?: string }[] })?.content ?? [];
   const textContent = content.find((c) => c.type === 'text');
   return { text: textContent?.text ?? '' };
-}
-
-function parseEnvelope(text: string): { envelope?: Record<string, unknown>; parsed: string } {
-  try {
-    const envelope = JSON.parse(text);
-    if (envelope && typeof envelope === 'object') return { envelope, parsed: String(envelope.result ?? '') };
-  } catch {
-    /* not an envelope */
-  }
-  return { parsed: text };
-}
-
-function projectOfDetail(text: string): string | null {
-  for (const line of text.split('\n')) {
-    if (line.startsWith('Project: ')) return line.slice('Project: '.length).trim();
-  }
-  return null;
-}
-
-// Observation facts from a mem_get_observation result. The stored text is
-// "#<id> [<type>] <title>" followed by the content and a trailing
-// bookkeeping block ("Session:", "Project:", "Scope:", "Topic:",
-// "Duplicates:", "Revisions:", "Created:" — one per line). The detail card
-// shows these facts, so the body drops the header line and the block.
-function observationFacts(parsed: string): {
-  title: string;
-  type: string;
-  createdAt: string | null;
-  sessionId: string | null;
-  scope: string | null;
-  topic: string | null;
-  body: string;
-} {
-  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
-  const meta: Record<string, string> = {};
-  const lines = parsed.split('\n');
-  let i = lines.length;
-  while (i > 0) {
-    const line = lines[i - 1].trim();
-    if (!line) {
-      i -= 1;
-      continue;
-    }
-    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
-    if (!m) break;
-    meta[m[1]] = m[2].trim();
-    i -= 1;
-  }
-  const bodyLines = lines.slice(0, i);
-  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
-    bodyLines.shift();
-  }
-  return {
-    title: (headerMatch?.[2] ?? '').trim(),
-    type: (headerMatch?.[1] ?? '').trim(),
-    createdAt: meta.Created ?? null,
-    sessionId: meta.Session ?? null,
-    scope: meta.Scope ?? null,
-    topic: meta.Topic ?? null,
-    body: bodyLines.join('\n').trim(),
-  };
 }
 
 async function exportProject(ctx: Context, project: string): Promise<{ ok: boolean; data?: any; code?: string }> {
@@ -438,8 +350,7 @@ const server = http.createServer(async (req, res) => {
         }
         // `mem_current_project` never errors on ambiguity: it returns project "" with
         // project_source "ambiguous" (or a git/history conflict) plus available_projects.
-        const projectStatus: 'resolved' | 'ambiguous' | 'unknown' =
-          project && projectSource !== 'ambiguous' ? 'resolved' : candidates.length ? 'ambiguous' : 'unknown';
+        const projectStatus = projectStatusFor(project, projectSource, candidates);
         touchContext(ctx);
         json(res, 200, {
           ok: true,
@@ -482,13 +393,9 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         const { envelope, parsed } = parseEnvelope(r.text!);
-        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
-        // Sort by created_at DESC (most recent first)
-        results.sort((a, b) => {
-          const at = String(a.created_at ?? '');
-          const bt = String(b.created_at ?? '');
-          return bt.localeCompare(at);
-        });
+        const results = sortByCreatedAtDesc(
+          Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [],
+        );
         const message = parsed.trim();
         json(res, 200, {
           ok: true,
@@ -652,13 +559,9 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         const { envelope, parsed } = parseEnvelope(r.text!);
-        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
-        // Sort by created_at DESC (most recent first)
-        results.sort((a, b) => {
-          const at = String(a.created_at ?? '');
-          const bt = String(b.created_at ?? '');
-          return bt.localeCompare(at);
-        });
+        const results = sortByCreatedAtDesc(
+          Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [],
+        );
         const message = parsed.trim();
         json(res, 200, {
           ok: true,
@@ -734,7 +637,7 @@ const server = http.createServer(async (req, res) => {
         const text = r.text!;
         const { envelope, parsed } = parseEnvelope(text);
         const detailProject = projectOfDetail(parsed);
-        if (bound && detailProject && detailProject !== bound) {
+        if (ownershipMismatch(bound, detailProject)) {
           json(res, 200, { ok: false, code: 'project-mismatch' });
           return;
         }
@@ -766,19 +669,11 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         const parsed = JSON.parse(r.text!) as {
-          projects?: {
-            name: string;
-            observation_count: number;
-            session_count: number;
-            prompt_count: number;
-            directories: string[];
-          }[];
+          projects?: ProjectStatsRow[];
           count: number;
         };
         const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
-        const target = project
-          ? projects.find((p) => p.name.toLowerCase() === project.toLowerCase())
-          : (projects[0] ?? null);
+        const target = selectStatsTarget(projects, project);
         json(res, 200, {
           ok: true,
           stats: target

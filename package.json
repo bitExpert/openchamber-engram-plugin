@@ -13,13 +13,17 @@
     "check": "openchamber-guest-check .",
     "lint": "biome ci .",
     "format": "biome format --write .",
-    "verify": "bun run typecheck && bun run lint && bun run bundle && bun run check && git diff --exit-code -- panel/main.js service/main.js"
+    "test": "bun test",
+    "verify": "bun run typecheck && bun run lint && bun run test && bun run bundle && bun run check && git diff --exit-code -- panel/main.js service/main.js"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
     "@openchamber/sdk": "^2.7.2",
+    "@types/bun": "^1.4.4",
+    "@types/jsdom": "^30.0.0",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.6.2",
+    "jsdom": "^31.0.1",
     "typescript": "^5.6.0"
   },
   "openchamber": {
