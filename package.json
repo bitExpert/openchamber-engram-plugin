@@ -53,6 +53,6 @@
   },
   "dependencies": {
     "dompurify": "3.4.17",
-    "marked": "^13.0.0"
+    "marked": "^18.2.0"
   }
 }
