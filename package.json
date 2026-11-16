@@ -3,16 +3,27 @@
   "description": "Read-only browser for Engram memories about the active OpenChamber project.",
   "version": "0.4.0",
   "private": true,
+  "packageManager": "bun@1.2.12",
   "type": "module",
   "scripts": {
     "bundle:panel": "openchamber-guest-bundle panel/main.ts panel/main.js",
     "bundle:service": "openchamber-guest-bundle --node service/main.ts service/main.js",
-    "bundle": "bun run bundle:panel && bun run bundle:service"
+    "bundle": "bun run bundle:panel && bun run bundle:service",
+    "typecheck": "tsc --noEmit",
+    "check": "openchamber-guest-check .",
+    "lint": "biome ci .",
+    "format": "biome format --write .",
+    "test": "bun test",
+    "verify": "bun run typecheck && bun run lint && bun run test && bun run bundle && bun run check && git diff --exit-code -- panel/main.js service/main.js"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
     "@openchamber/sdk": "^2.7.2",
+    "@types/bun": "^1.4.4",
+    "@types/jsdom": "^30.0.0",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.6.2",
+    "jsdom": "^31.0.1",
     "typescript": "^5.6.0"
   },
   "openchamber": {

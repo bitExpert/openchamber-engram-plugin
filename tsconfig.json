@@ -6,7 +6,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["@types/node"],
+    "types": ["@types/node", "bun"],
   },
-  "include": ["panel/main.ts", "service/main.ts"]
+  "include": ["panel/**/*.ts", "service/**/*.ts", "test/**/*.ts"]
 }

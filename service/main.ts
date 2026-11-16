@@ -1,7 +1,24 @@
-import http from 'node:http';
-import { spawn, execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import http from 'node:http';
+
+import {
+  ALLOWED_TOOLS,
+  contextId,
+  ENGRAM_FLOOR_LABEL,
+  meetsFloor,
+  observationFacts,
+  ownershipMismatch,
+  type ProjectStatsRow,
+  parseEnvelope,
+  parseVersion,
+  projectOfDetail,
+  projectStatusFor,
+  type SpawnConfig,
+  selectStatsTarget,
+  sortByCreatedAtDesc,
+  spawnKey,
+} from './lib';
 
 const port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
 const token = process.env.OPENCHAMBER_SERVICE_TOKEN ?? '';
@@ -10,18 +27,6 @@ if (!port || !token) {
   process.exit(1);
 }
 
-const ALLOWED_TOOLS = new Set([
-  'mem_current_project',
-  'mem_list_projects',
-  'mem_context',
-  'mem_search',
-  'mem_get_observation',
-  'mem_search_prompts',
-  'mem_stats',
-]);
-
-const ENGRAM_FLOOR = [3, 4];
-const ENGRAM_FLOOR_LABEL = `${ENGRAM_FLOOR[0]}.${ENGRAM_FLOOR[1]}.0`;
 const CONTEXT_IDLE_MS = 60_000;
 const MCP_CALL_TIMEOUT_MS = 8_000;
 const MAX_CONTEXTS = 2;
@@ -54,28 +59,26 @@ const json = (res: http.ServerResponse, status: number, body: unknown): void => 
 function readBody(req: http.IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let raw = '';
-    req.on('data', (chunk) => { raw += chunk; });
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
     req.on('end', () => {
-      try { resolve(raw ? JSON.parse(raw) : {}); } catch { reject(new Error('invalid-json')); }
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        reject(new Error('invalid-json'));
+      }
     });
     req.on('error', reject);
   });
 }
 
-function parseVersion(raw: string): [number, number] | null {
-  const m = /engram\s+(\d+)\.(\d+)\.(\d+)/.exec(raw.trim());
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2])];
-}
-
-function meetsFloor(v: [number, number] | null): boolean {
-  if (!v) return false;
-  if (v[0] > ENGRAM_FLOOR[0]) return true;
-  if (v[0] === ENGRAM_FLOOR[0] && v[1] >= ENGRAM_FLOOR[1]) return true;
-  return false;
-}
-
-function sendMcp(ctx: Context, method: string, params: unknown, id?: number): Promise<{ result?: unknown; error?: unknown }> {
+function sendMcp(
+  ctx: Context,
+  method: string,
+  params: unknown,
+  id?: number,
+): Promise<{ result?: unknown; error?: unknown }> {
   if (!ctx.alive) return Promise.reject(new Error('transport-closed'));
   const requestId = id ?? ctx.nextId++;
   return new Promise((resolve, reject) => {
@@ -106,27 +109,13 @@ async function initializeMcp(ctx: Context): Promise<void> {
   await notify(ctx, 'notifications/initialized');
   const tools = await sendMcp(ctx, 'tools/list', {});
   const names = ((tools.result as { tools: { name: string }[] })?.tools ?? []).map((t) => t.name);
-  const missing = ['mem_current_project', 'mem_context', 'mem_search', 'mem_get_observation'].filter((n) => !names.includes(n));
+  const missing = ['mem_current_project', 'mem_context', 'mem_search', 'mem_get_observation'].filter(
+    (n) => !names.includes(n),
+  );
   if (missing.length) throw new Error(`unsupported-engram`);
 }
 
-function contextId(directory: string, configKey: string): string {
-  return createHash('sha1').update(`${directory}\0${configKey}`).digest('hex').slice(0, 16);
-}
-
-// Every field that changes how the Engram child is spawned must appear here, so a
-// changed project mapping (or executable / data dir) gets its own child process.
-// The previous expression relied on `??` binding looser than `+`, which dropped
-// dataDir/projectOverride whenever an executable was configured.
-function spawnKey(config: { executable?: string; dataDir?: string | null; projectOverride?: string | null }): string {
-  return JSON.stringify({
-    executable: config.executable ?? 'engram',
-    dataDir: config.dataDir ?? null,
-    projectOverride: config.projectOverride ?? null,
-  });
-}
-
-function spawnContext(config: { executable?: string; dataDir?: string | null; projectOverride?: string | null }, directory: string): Promise<Context> {
+function spawnContext(config: SpawnConfig, directory: string): Promise<Context> {
   const id = contextId(directory, spawnKey(config));
   if (contexts.size >= MAX_CONTEXTS && !contexts.has(id)) {
     return Promise.reject(new Error('context-limit'));
@@ -160,12 +149,17 @@ function spawnContext(config: { executable?: string; dataDir?: string | null; pr
   child.stdout.on('data', (d) => {
     ctx.buf += d.toString();
     let nl: number;
+    // biome-ignore lint/suspicious/noAssignInExpressions: single-assignment JSONL line reader
     while ((nl = ctx.buf.indexOf('\n')) !== -1) {
       const line = ctx.buf.slice(0, nl).trim();
       ctx.buf = ctx.buf.slice(nl + 1);
       if (!line) continue;
       let msg: unknown;
-      try { msg = JSON.parse(line); } catch { continue; }
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
       const m = msg as { id?: number };
       if (m.id !== undefined && ctx.pending.has(m.id)) {
         const handler = ctx.pending.get(m.id)!;
@@ -174,11 +168,14 @@ function spawnContext(config: { executable?: string; dataDir?: string | null; pr
       }
     }
   });
-  child.stderr.on('data', (d) => { process.stderr.write(`[engram] ${d}`); });
+  child.stderr.on('data', (d) => {
+    process.stderr.write(`[engram] ${d}`);
+  });
   child.on('exit', (code, signal) => {
     ctx.alive = false;
     if (ctx.idleTimer) clearTimeout(ctx.idleTimer);
-    for (const [, handler] of ctx.pending) handler({ error: { code: -32000, message: `child-exited ${code ?? signal}` } });
+    for (const [, handler] of ctx.pending)
+      handler({ error: { code: -32000, message: `child-exited ${code ?? signal}` } });
     ctx.pending.clear();
   });
   child.on('error', (err) => {
@@ -201,11 +198,19 @@ function touchContext(ctx: Context): void {
 function stopContext(ctx: Context): void {
   if (ctx.idleTimer) clearTimeout(ctx.idleTimer);
   ctx.alive = false;
-  try { ctx.child.kill('SIGTERM'); } catch { /* noop */ }
+  try {
+    ctx.child.kill('SIGTERM');
+  } catch {
+    /* noop */
+  }
   contexts.delete(ctx.id);
 }
 
-async function toolCall(ctx: Context, name: string, args: Record<string, unknown>): Promise<{ error?: string; text?: string }> {
+async function toolCall(
+  ctx: Context,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ error?: string; text?: string }> {
   if (!ALLOWED_TOOLS.has(name)) return { error: `denied: ${name}` };
   touchContext(ctx);
   let result: { result?: unknown; error?: unknown };
@@ -218,62 +223,6 @@ async function toolCall(ctx: Context, name: string, args: Record<string, unknown
   const content = (result.result as { content?: { type: string; text?: string }[] })?.content ?? [];
   const textContent = content.find((c) => c.type === 'text');
   return { text: textContent?.text ?? '' };
-}
-
-function parseEnvelope(text: string): { envelope?: Record<string, unknown>; parsed: string } {
-  try {
-    const envelope = JSON.parse(text);
-    if (envelope && typeof envelope === 'object') return { envelope, parsed: String(envelope.result ?? '') };
-  } catch { /* not an envelope */ }
-  return { parsed: text };
-}
-
-function projectOfDetail(text: string): string | null {
-  for (const line of text.split('\n')) {
-    if (line.startsWith('Project: ')) return line.slice('Project: '.length).trim();
-  }
-  return null;
-}
-
-// Observation facts from a mem_get_observation result. The stored text is
-// "#<id> [<type>] <title>" followed by the content and a trailing
-// bookkeeping block ("Session:", "Project:", "Scope:", "Topic:",
-// "Duplicates:", "Revisions:", "Created:" — one per line). The detail card
-// shows these facts, so the body drops the header line and the block.
-function observationFacts(parsed: string): {
-  title: string;
-  type: string;
-  createdAt: string | null;
-  sessionId: string | null;
-  scope: string | null;
-  topic: string | null;
-  body: string;
-} {
-  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
-  const meta: Record<string, string> = {};
-  const lines = parsed.split('\n');
-  let i = lines.length;
-  while (i > 0) {
-    const line = lines[i - 1].trim();
-    if (!line) { i -= 1; continue; }
-    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
-    if (!m) break;
-    meta[m[1]] = m[2].trim();
-    i -= 1;
-  }
-  const bodyLines = lines.slice(0, i);
-  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
-    bodyLines.shift();
-  }
-  return {
-    title: (headerMatch?.[2] ?? '').trim(),
-    type: (headerMatch?.[1] ?? '').trim(),
-    createdAt: meta.Created ?? null,
-    sessionId: meta.Session ?? null,
-    scope: meta.Scope ?? null,
-    topic: meta.Topic ?? null,
-    body: bodyLines.join('\n').trim(),
-  };
 }
 
 async function exportProject(ctx: Context, project: string): Promise<{ ok: boolean; data?: any; code?: string }> {
@@ -292,9 +241,17 @@ async function exportProject(ctx: Context, project: string): Promise<{ ok: boole
       if (ctx.projectOverride) env.ENGRAM_PROJECT = ctx.projectOverride;
       let stdout = '';
       let stderr = '';
-      const proc = spawn(ctx.executable, ['export', tmpFile, '--project', project], { cwd: ctx.directory, env, shell: false });
-      proc.stdout.on('data', (d) => { stdout += d; });
-      proc.stderr.on('data', (d) => { stderr += d; });
+      const proc = spawn(ctx.executable, ['export', tmpFile, '--project', project], {
+        cwd: ctx.directory,
+        env,
+        shell: false,
+      });
+      proc.stdout.on('data', (d) => {
+        stdout += d;
+      });
+      proc.stderr.on('data', (d) => {
+        stderr += d;
+      });
       proc.on('close', (code) => resolve({ stdout, stderr, code }));
       proc.on('error', (err) => resolve({ stdout, stderr, code: -1 }));
       setTimeout(() => {
@@ -309,9 +266,11 @@ async function exportProject(ctx: Context, project: string): Promise<{ ok: boole
     }
 
     const raw = await new Promise<string>((resolve, reject) => {
-      import('node:fs').then(({ readFile }) => {
-        readFile(tmpFile, 'utf8', (err, data) => err ? reject(err) : resolve(data));
-      }).catch(reject);
+      import('node:fs')
+        .then(({ readFile }) => {
+          readFile(tmpFile, 'utf8', (err, data) => (err ? reject(err) : resolve(data)));
+        })
+        .catch(reject);
     });
 
     const data = JSON.parse(raw);
@@ -344,7 +303,11 @@ const server = http.createServer(async (req, res) => {
     const body = (await readBody(req)) as Record<string, unknown>;
     switch (url.pathname) {
       case '/v1/connect': {
-        const config = (body.config ?? {}) as { executable?: string; dataDir?: string | null; projectOverride?: string | null };
+        const config = (body.config ?? {}) as {
+          executable?: string;
+          dataDir?: string | null;
+          projectOverride?: string | null;
+        };
         const directory = String(body.directory ?? process.cwd());
         const executable = config.executable ?? 'engram';
         const versionOut = await new Promise<string>((resolve, reject) => {
@@ -387,8 +350,7 @@ const server = http.createServer(async (req, res) => {
         }
         // `mem_current_project` never errors on ambiguity: it returns project "" with
         // project_source "ambiguous" (or a git/history conflict) plus available_projects.
-        const projectStatus: 'resolved' | 'ambiguous' | 'unknown' =
-          project && projectSource !== 'ambiguous' ? 'resolved' : candidates.length ? 'ambiguous' : 'unknown';
+        const projectStatus = projectStatusFor(project, projectSource, candidates);
         touchContext(ctx);
         json(res, 200, {
           ok: true,
@@ -405,9 +367,15 @@ const server = http.createServer(async (req, res) => {
       }
       case '/v1/observations': {
         const ctx = contexts.get(String(body.contextId ?? ''));
-        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        if (!ctx) {
+          json(res, 200, { ok: false, code: 'no-context' });
+          return;
+        }
         const project = typeof body.project === 'string' ? body.project : undefined;
-        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+        if (!project) {
+          json(res, 200, { ok: false, code: 'missing-project' });
+          return;
+        }
         const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
         // Use project name as query — every row matches via its project column.
         // LIKE path (short term) or FTS both include project in the disjunction,
@@ -420,15 +388,14 @@ const server = http.createServer(async (req, res) => {
           response_format: 'compact',
           match_mode: 'all',
         });
-        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        if (r.error) {
+          json(res, 200, { ok: false, code: 'read-failed', message: r.error });
+          return;
+        }
         const { envelope, parsed } = parseEnvelope(r.text!);
-        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
-        // Sort by created_at DESC (most recent first)
-        results.sort((a, b) => {
-          const at = String(a.created_at ?? '');
-          const bt = String(b.created_at ?? '');
-          return bt.localeCompare(at);
-        });
+        const results = sortByCreatedAtDesc(
+          Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [],
+        );
         const message = parsed.trim();
         json(res, 200, {
           ok: true,
@@ -447,12 +414,21 @@ const server = http.createServer(async (req, res) => {
       }
       case '/v1/sessions': {
         const ctx = contexts.get(String(body.contextId ?? ''));
-        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        if (!ctx) {
+          json(res, 200, { ok: false, code: 'no-context' });
+          return;
+        }
         const project = typeof body.project === 'string' ? body.project : undefined;
-        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+        if (!project) {
+          json(res, 200, { ok: false, code: 'missing-project' });
+          return;
+        }
 
         const exp = await exportProject(ctx, project);
-        if (!exp.ok) { json(res, 200, { ok: false, code: exp.code ?? 'read-failed' }); return; }
+        if (!exp.ok) {
+          json(res, 200, { ok: false, code: exp.code ?? 'read-failed' });
+          return;
+        }
 
         // Build session list from export
         const sessions: any[] = [];
@@ -487,7 +463,10 @@ const server = http.createServer(async (req, res) => {
       }
       case '/v1/sessionDetail': {
         const ctx = contexts.get(String(body.contextId ?? ''));
-        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        if (!ctx) {
+          json(res, 200, { ok: false, code: 'no-context' });
+          return;
+        }
         const project = typeof body.project === 'string' ? body.project : undefined;
         const sessionId = String(body.sessionId ?? '');
         if (!project || !sessionId) {
@@ -496,7 +475,10 @@ const server = http.createServer(async (req, res) => {
         }
 
         const exp = await exportProject(ctx, project);
-        if (!exp.ok) { json(res, 200, { ok: false, code: exp.code ?? 'read-failed' }); return; }
+        if (!exp.ok) {
+          json(res, 200, { ok: false, code: exp.code ?? 'read-failed' });
+          return;
+        }
 
         const session = (exp.data.sessions || []).find((s: any) => s.id === sessionId);
         if (!session) {
@@ -553,9 +535,15 @@ const server = http.createServer(async (req, res) => {
       }
       case '/v1/prompts': {
         const ctx = contexts.get(String(body.contextId ?? ''));
-        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        if (!ctx) {
+          json(res, 200, { ok: false, code: 'no-context' });
+          return;
+        }
         const project = typeof body.project === 'string' ? body.project : undefined;
-        if (!project) { json(res, 200, { ok: false, code: 'missing-project' }); return; }
+        if (!project) {
+          json(res, 200, { ok: false, code: 'missing-project' });
+          return;
+        }
         const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
         // Use project name as query — every row matches via its project column.
         // LIKE path (short term) or FTS both include project in the disjunction,
@@ -566,15 +554,14 @@ const server = http.createServer(async (req, res) => {
           project,
           limit,
         });
-        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        if (r.error) {
+          json(res, 200, { ok: false, code: 'read-failed', message: r.error });
+          return;
+        }
         const { envelope, parsed } = parseEnvelope(r.text!);
-        const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
-        // Sort by created_at DESC (most recent first)
-        results.sort((a, b) => {
-          const at = String(a.created_at ?? '');
-          const bt = String(b.created_at ?? '');
-          return bt.localeCompare(at);
-        });
+        const results = sortByCreatedAtDesc(
+          Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [],
+        );
         const message = parsed.trim();
         json(res, 200, {
           ok: true,
@@ -591,18 +578,27 @@ const server = http.createServer(async (req, res) => {
       }
       case '/v1/search': {
         const ctx = contexts.get(String(body.contextId ?? ''));
-        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        if (!ctx) {
+          json(res, 200, { ok: false, code: 'no-context' });
+          return;
+        }
         const query = String(body.query ?? '').trim();
-        if (!query) { json(res, 200, { ok: false, code: 'empty-query' }); return; }
+        if (!query) {
+          json(res, 200, { ok: false, code: 'empty-query' });
+          return;
+        }
         const limit = Math.min(Number(body.limit ?? 20) || 20, 20);
         const r = await toolCall(ctx, 'mem_search', {
           query,
           project: typeof body.project === 'string' ? body.project : undefined,
           limit,
           response_format: 'compact',
-          match_mode: body.broad ?? true ? 'any' : 'all',
+          match_mode: (body.broad ?? true) ? 'any' : 'all',
         });
-        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        if (r.error) {
+          json(res, 200, { ok: false, code: 'read-failed', message: r.error });
+          return;
+        }
         const { envelope, parsed } = parseEnvelope(r.text!);
         const results = Array.isArray(envelope?.results) ? (envelope.results as Record<string, unknown>[]) : [];
         const message = parsed.trim();
@@ -623,16 +619,25 @@ const server = http.createServer(async (req, res) => {
       }
       case '/v1/getMemory': {
         const ctx = contexts.get(String(body.contextId ?? ''));
-        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        if (!ctx) {
+          json(res, 200, { ok: false, code: 'no-context' });
+          return;
+        }
         const id = Number(body.id);
-        if (!Number.isInteger(id) || id <= 0) { json(res, 200, { ok: false, code: 'invalid-id' }); return; }
+        if (!Number.isInteger(id) || id <= 0) {
+          json(res, 200, { ok: false, code: 'invalid-id' });
+          return;
+        }
         const bound = typeof body.project === 'string' ? body.project : ctx.projectOverride;
         const r = await toolCall(ctx, 'mem_get_observation', { id });
-        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
+        if (r.error) {
+          json(res, 200, { ok: false, code: 'read-failed', message: r.error });
+          return;
+        }
         const text = r.text!;
         const { envelope, parsed } = parseEnvelope(text);
         const detailProject = projectOfDetail(parsed);
-        if (bound && detailProject && detailProject !== bound) {
+        if (ownershipMismatch(bound, detailProject)) {
           json(res, 200, { ok: false, code: 'project-mismatch' });
           return;
         }
@@ -653,14 +658,28 @@ const server = http.createServer(async (req, res) => {
       }
       case '/v1/stats': {
         const ctx = contexts.get(String(body.contextId ?? ''));
-        if (!ctx) { json(res, 200, { ok: false, code: 'no-context' }); return; }
+        if (!ctx) {
+          json(res, 200, { ok: false, code: 'no-context' });
+          return;
+        }
         const project = typeof body.project === 'string' ? body.project : undefined;
         const r = await toolCall(ctx, 'mem_list_projects', project ? { project } : {});
-        if (r.error) { json(res, 200, { ok: false, code: 'read-failed', message: r.error }); return; }
-        const parsed = JSON.parse(r.text!) as { projects?: { name: string; observation_count: number; session_count: number; prompt_count: number; directories: string[] }[]; count: number };
+        if (r.error) {
+          json(res, 200, { ok: false, code: 'read-failed', message: r.error });
+          return;
+        }
+        const parsed = JSON.parse(r.text!) as {
+          projects?: ProjectStatsRow[];
+          count: number;
+        };
         const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
-        const target = project ? projects.find((p) => p.name.toLowerCase() === project.toLowerCase()) : (projects[0] ?? null);
-        json(res, 200, { ok: true, stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null });
+        const target = selectStatsTarget(projects, project);
+        json(res, 200, {
+          ok: true,
+          stats: target
+            ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count }
+            : null,
+        });
         return;
       }
       case '/v1/disconnect': {

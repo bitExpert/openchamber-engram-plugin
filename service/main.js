@@ -18,15 +18,13 @@ var __toESM = (mod, isNodeMode, target) => {
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // service/main.ts
+import { execFile, spawn } from "node:child_process";
 import http from "node:http";
-import { spawn, execFile } from "node:child_process";
+
+// service/lib.ts
 import { createHash } from "node:crypto";
-var port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
-var token = process.env.OPENCHAMBER_SERVICE_TOKEN ?? "";
-if (!port || !token) {
-  console.error("OPENCHAMBER_SERVICE_PORT and OPENCHAMBER_SERVICE_TOKEN are required");
-  process.exit(1);
-}
+var ENGRAM_FLOOR = [3, 4];
+var ENGRAM_FLOOR_LABEL = `${ENGRAM_FLOOR[0]}.${ENGRAM_FLOOR[1]}.0`;
 var ALLOWED_TOOLS = new Set([
   "mem_current_project",
   "mem_list_projects",
@@ -36,8 +34,104 @@ var ALLOWED_TOOLS = new Set([
   "mem_search_prompts",
   "mem_stats"
 ]);
-var ENGRAM_FLOOR = [3, 4];
-var ENGRAM_FLOOR_LABEL = `${ENGRAM_FLOOR[0]}.${ENGRAM_FLOOR[1]}.0`;
+function parseVersion(raw) {
+  const m = /engram\s+(\d+)\.(\d+)\.(\d+)/.exec(raw.trim());
+  if (!m)
+    return null;
+  return [Number(m[1]), Number(m[2])];
+}
+function meetsFloor(v) {
+  if (!v)
+    return false;
+  if (v[0] > ENGRAM_FLOOR[0])
+    return true;
+  if (v[0] === ENGRAM_FLOOR[0] && v[1] >= ENGRAM_FLOOR[1])
+    return true;
+  return false;
+}
+function contextId(directory, configKey) {
+  return createHash("sha1").update(`${directory}\x00${configKey}`).digest("hex").slice(0, 16);
+}
+function spawnKey(config) {
+  return JSON.stringify({
+    executable: config.executable ?? "engram",
+    dataDir: config.dataDir ?? null,
+    projectOverride: config.projectOverride ?? null
+  });
+}
+function parseEnvelope(text) {
+  try {
+    const envelope = JSON.parse(text);
+    if (envelope && typeof envelope === "object")
+      return { envelope, parsed: String(envelope.result ?? "") };
+  } catch {}
+  return { parsed: text };
+}
+function projectOfDetail(text) {
+  for (const line of text.split(`
+`)) {
+    if (line.startsWith("Project: "))
+      return line.slice("Project: ".length).trim();
+  }
+  return null;
+}
+function ownershipMismatch(bound, detailProject) {
+  return Boolean(bound && detailProject && detailProject !== bound);
+}
+function observationFacts(parsed) {
+  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
+  const meta = {};
+  const lines = parsed.split(`
+`);
+  let i = lines.length;
+  while (i > 0) {
+    const line = lines[i - 1].trim();
+    if (!line) {
+      i -= 1;
+      continue;
+    }
+    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
+    if (!m)
+      break;
+    meta[m[1]] = m[2].trim();
+    i -= 1;
+  }
+  const bodyLines = lines.slice(0, i);
+  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
+    bodyLines.shift();
+  }
+  return {
+    title: (headerMatch?.[2] ?? "").trim(),
+    type: (headerMatch?.[1] ?? "").trim(),
+    createdAt: meta.Created ?? null,
+    sessionId: meta.Session ?? null,
+    scope: meta.Scope ?? null,
+    topic: meta.Topic ?? null,
+    body: bodyLines.join(`
+`).trim()
+  };
+}
+function sortByCreatedAtDesc(rows) {
+  return [...rows].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+}
+function projectStatusFor(project, projectSource, candidates) {
+  if (project && projectSource !== "ambiguous")
+    return "resolved";
+  return candidates.length ? "ambiguous" : "unknown";
+}
+function selectStatsTarget(projects, project) {
+  if (project)
+    return projects.find((p) => p.name.toLowerCase() === project.toLowerCase()) ?? null;
+  return projects[0] ?? null;
+}
+
+// service/main.ts
+var port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
+var token = process.env.OPENCHAMBER_SERVICE_TOKEN ?? "";
+if (!port || !token) {
+  console.error("OPENCHAMBER_SERVICE_PORT and OPENCHAMBER_SERVICE_TOKEN are required");
+  process.exit(1);
+}
 var CONTEXT_IDLE_MS = 60000;
 var MCP_CALL_TIMEOUT_MS = 8000;
 var MAX_CONTEXTS = 2;
@@ -62,21 +156,6 @@ function readBody(req) {
     });
     req.on("error", reject);
   });
-}
-function parseVersion(raw) {
-  const m = /engram\s+(\d+)\.(\d+)\.(\d+)/.exec(raw.trim());
-  if (!m)
-    return null;
-  return [Number(m[1]), Number(m[2])];
-}
-function meetsFloor(v) {
-  if (!v)
-    return false;
-  if (v[0] > ENGRAM_FLOOR[0])
-    return true;
-  if (v[0] === ENGRAM_FLOOR[0] && v[1] >= ENGRAM_FLOOR[1])
-    return true;
-  return false;
 }
 function sendMcp(ctx, method, params, id) {
   if (!ctx.alive)
@@ -115,16 +194,6 @@ async function initializeMcp(ctx) {
   const missing = ["mem_current_project", "mem_context", "mem_search", "mem_get_observation"].filter((n) => !names.includes(n));
   if (missing.length)
     throw new Error(`unsupported-engram`);
-}
-function contextId(directory, configKey) {
-  return createHash("sha1").update(`${directory}\x00${configKey}`).digest("hex").slice(0, 16);
-}
-function spawnKey(config) {
-  return JSON.stringify({
-    executable: config.executable ?? "engram",
-    dataDir: config.dataDir ?? null,
-    projectOverride: config.projectOverride ?? null
-  });
 }
 function spawnContext(config, directory) {
   const id = contextId(directory, spawnKey(config));
@@ -235,55 +304,6 @@ async function toolCall(ctx, name, args) {
   const textContent = content.find((c) => c.type === "text");
   return { text: textContent?.text ?? "" };
 }
-function parseEnvelope(text) {
-  try {
-    const envelope = JSON.parse(text);
-    if (envelope && typeof envelope === "object")
-      return { envelope, parsed: String(envelope.result ?? "") };
-  } catch {}
-  return { parsed: text };
-}
-function projectOfDetail(text) {
-  for (const line of text.split(`
-`)) {
-    if (line.startsWith("Project: "))
-      return line.slice("Project: ".length).trim();
-  }
-  return null;
-}
-function observationFacts(parsed) {
-  const headerMatch = /^#[0-9]+\s*(?:\[([^\]]*)\]\s*)?([^\n]*)/.exec(parsed.trim());
-  const meta = {};
-  const lines = parsed.split(`
-`);
-  let i = lines.length;
-  while (i > 0) {
-    const line = lines[i - 1].trim();
-    if (!line) {
-      i -= 1;
-      continue;
-    }
-    const m = /^(Session|Project|Scope|Topic|Duplicates|Revisions|Created):\s*(.*)$/.exec(line);
-    if (!m)
-      break;
-    meta[m[1]] = m[2].trim();
-    i -= 1;
-  }
-  const bodyLines = lines.slice(0, i);
-  if (headerMatch && bodyLines.length && /^#[0-9]+/.test(bodyLines[0].trim())) {
-    bodyLines.shift();
-  }
-  return {
-    title: (headerMatch?.[2] ?? "").trim(),
-    type: (headerMatch?.[1] ?? "").trim(),
-    createdAt: meta.Created ?? null,
-    sessionId: meta.Session ?? null,
-    scope: meta.Scope ?? null,
-    topic: meta.Topic ?? null,
-    body: bodyLines.join(`
-`).trim()
-  };
-}
 async function exportProject(ctx, project) {
   const cacheKey = `${ctx.id}:${project}`;
   const now = Date.now();
@@ -301,7 +321,11 @@ async function exportProject(ctx, project) {
         env.ENGRAM_PROJECT = ctx.projectOverride;
       let stdout = "";
       let stderr = "";
-      const proc = spawn(ctx.executable, ["export", tmpFile, "--project", project], { cwd: ctx.directory, env, shell: false });
+      const proc = spawn(ctx.executable, ["export", tmpFile, "--project", project], {
+        cwd: ctx.directory,
+        env,
+        shell: false
+      });
       proc.stdout.on("data", (d) => {
         stdout += d;
       });
@@ -394,7 +418,7 @@ var server = http.createServer(async (req, res) => {
             candidates = (parsed.projects ?? []).map((p) => p.name);
           }
         }
-        const projectStatus = project && projectSource !== "ambiguous" ? "resolved" : candidates.length ? "ambiguous" : "unknown";
+        const projectStatus = projectStatusFor(project, projectSource, candidates);
         touchContext(ctx);
         json(res, 200, {
           ok: true,
@@ -433,12 +457,7 @@ var server = http.createServer(async (req, res) => {
           return;
         }
         const { envelope, parsed } = parseEnvelope(r.text);
-        const results = Array.isArray(envelope?.results) ? envelope.results : [];
-        results.sort((a, b) => {
-          const at = String(a.created_at ?? "");
-          const bt = String(b.created_at ?? "");
-          return bt.localeCompare(at);
-        });
+        const results = sortByCreatedAtDesc(Array.isArray(envelope?.results) ? envelope.results : []);
         const message = parsed.trim();
         json(res, 200, {
           ok: true,
@@ -578,12 +597,7 @@ var server = http.createServer(async (req, res) => {
           return;
         }
         const { envelope, parsed } = parseEnvelope(r.text);
-        const results = Array.isArray(envelope?.results) ? envelope.results : [];
-        results.sort((a, b) => {
-          const at = String(a.created_at ?? "");
-          const bt = String(b.created_at ?? "");
-          return bt.localeCompare(at);
-        });
+        const results = sortByCreatedAtDesc(Array.isArray(envelope?.results) ? envelope.results : []);
         const message = parsed.trim();
         json(res, 200, {
           ok: true,
@@ -659,7 +673,7 @@ var server = http.createServer(async (req, res) => {
         const text = r.text;
         const { envelope, parsed } = parseEnvelope(text);
         const detailProject = projectOfDetail(parsed);
-        if (bound && detailProject && detailProject !== bound) {
+        if (ownershipMismatch(bound, detailProject)) {
           json(res, 200, { ok: false, code: "project-mismatch" });
           return;
         }
@@ -692,8 +706,11 @@ var server = http.createServer(async (req, res) => {
         }
         const parsed = JSON.parse(r.text);
         const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
-        const target = project ? projects.find((p) => p.name.toLowerCase() === project.toLowerCase()) : projects[0] ?? null;
-        json(res, 200, { ok: true, stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null });
+        const target = selectStatsTarget(projects, project);
+        json(res, 200, {
+          ok: true,
+          stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null
+        });
         return;
       }
       case "/v1/disconnect": {

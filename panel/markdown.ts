@@ -1,14 +1,35 @@
-import { marked, Tokens } from 'marked';
 import DOMPurify from 'dompurify';
+import { marked, type Tokens } from 'marked';
 
 const ALLOWED_TAGS = [
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'p', 'br', 'hr',
-  'ul', 'ol', 'li',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'p',
+  'br',
+  'hr',
+  'ul',
+  'ol',
+  'li',
   'blockquote',
-  'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
-  'em', 'strong', 'del', 'ins', 'code', 'pre',
-  'a', 'span',
+  'table',
+  'thead',
+  'tbody',
+  'tfoot',
+  'tr',
+  'th',
+  'td',
+  'em',
+  'strong',
+  'del',
+  'ins',
+  'code',
+  'pre',
+  'a',
+  'span',
 ];
 
 const ALLOWED_ATTR = ['href', 'title'];

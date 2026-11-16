@@ -46,6 +46,32 @@ bun run bundle          # both
 - After rebuilding the **service**, restart it by pausing and re-enabling the guest (Settings → Extensions, or `PUT /api/guests/engram-memory/enabled`).
 - The **panel** script is served statically by the host, so a browser reload picks up a new bundle without a service restart.
 
+## Quality checks
+
+CI runs on every pull request and on pushes to `master`:
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck   # tsc --noEmit
+bun run lint        # Biome (format + lint)
+bun run test        # bun test (unit tests)
+bun run check       # openchamber-guest-check packaging validation
+bun run bundle      # rebuild panel/main.js and service/main.js
+git diff --exit-code -- panel/main.js service/main.js   # committed bundles must match source
+```
+
+Run the same suite locally before pushing:
+
+```bash
+bun run verify
+```
+
+The built `panel/main.js` and `service/main.js` are committed (OpenChamber never compiles your code), so `verify` fails when a change to `*.ts` was not rebuilt. Formatting and linting are handled by [Biome](https://biomejs.dev) — run `bun run format` to apply the formatter.
+
+### Tests
+
+Unit tests use Bun's built-in runner (`bun test`). Pure service logic lives in `service/lib.ts` and is covered by `service/lib.test.ts`, including regression cases built from the captured responses in `fixtures/v2.0.0/`. The markdown sanitizer is covered by `panel/markdown.test.ts`; it runs against [jsdom](https://github.com/jsdom/jsdom) (loaded in `test/setup.ts`, preloaded via `bunfig.toml`) because DOMPurify reads `nodeName` from `Node.prototype`, which happy-dom does not implement.
+
 ## Configuration
 
 Guest storage key `config/v1` (set from the extension settings or panel setup screen):
