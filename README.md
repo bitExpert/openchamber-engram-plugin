@@ -18,7 +18,7 @@ A read-only OpenChamber extension that browses and searches [Engram](https://git
 
 ## Requirements
 
-- **OpenChamber 2.x** — `>=2.3.0`, built with `@openchamber/sdk@2.3.3` (wire API v1 compatible back to 1.22.0). Remote markdown images in observations render as links (opened in your browser) due to OpenChamber 2.0.4+ network sandboxing.
+- **OpenChamber 2.x** — `>=2.7.1`, built with `@openchamber/sdk@2.7.2`. Remote markdown images in observations render as links (opened in your browser) due to OpenChamber 2.0.4+ network sandboxing.
 - **Engram `>=3.4.0`** — the `engram` executable must be on `PATH` (extension checks the version; older versions get an explicit unsupported-version state naming the required floor). The detected version is shown in the panel title bar.
 
 ## Install

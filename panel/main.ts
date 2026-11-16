@@ -824,6 +824,21 @@ host.onReady((context) => {
     if (stored && typeof stored === 'object') config = stored as Config;
   }).finally(() => { void connect(); });
   context.directory !== undefined && (directory = context.directory ?? null);
+
+  // Mobile/Phone support: log device info and adjust layout if needed
+  // `ready.device` is available in OpenChamber >= 2.7.1
+  // - formFactor: 'phone' | 'tablet' | 'desktop'
+  // - pointer: 'coarse' (touch) | 'fine' (mouse)
+  // - insets: { top, right, bottom, left } in px (safe area)
+  // - keyboard: px of keyboard height (0 when closed)
+  if (context.device) {
+    console.log('OpenChamber device context:', {
+      formFactor: context.device.formFactor,
+      pointer: context.device.pointer,
+      insets: context.device.insets,
+      keyboard: context.device.keyboard,
+    });
+  }
 });
 
 host.onDirectory((dir) => {
