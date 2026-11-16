@@ -18,9 +18,9 @@ var __toESM = (mod, isNodeMode, target) => {
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // service/main.ts
-import http from "node:http";
-import { spawn, execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import http from "node:http";
 var port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
 var token = process.env.OPENCHAMBER_SERVICE_TOKEN ?? "";
 if (!port || !token) {
@@ -301,7 +301,11 @@ async function exportProject(ctx, project) {
         env.ENGRAM_PROJECT = ctx.projectOverride;
       let stdout = "";
       let stderr = "";
-      const proc = spawn(ctx.executable, ["export", tmpFile, "--project", project], { cwd: ctx.directory, env, shell: false });
+      const proc = spawn(ctx.executable, ["export", tmpFile, "--project", project], {
+        cwd: ctx.directory,
+        env,
+        shell: false
+      });
       proc.stdout.on("data", (d) => {
         stdout += d;
       });
@@ -693,7 +697,10 @@ var server = http.createServer(async (req, res) => {
         const parsed = JSON.parse(r.text);
         const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
         const target = project ? projects.find((p) => p.name.toLowerCase() === project.toLowerCase()) : projects[0] ?? null;
-        json(res, 200, { ok: true, stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null });
+        json(res, 200, {
+          ok: true,
+          stats: target ? { sessions: target.session_count, observations: target.observation_count, prompts: target.prompt_count } : null
+        });
         return;
       }
       case "/v1/disconnect": {

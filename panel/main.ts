@@ -1,5 +1,16 @@
 import { connectHost, type GuestRequestMethod, type JsonValue } from '@openchamber/sdk';
-import { applyHostReady, mountBadge, mountButton, mountList, mountSearchField, mountSelect, mountSeparator, mountTabs, type TabItem, type Tone } from '@openchamber/sdk/ui';
+import {
+  applyHostReady,
+  mountBadge,
+  mountButton,
+  mountList,
+  mountSearchField,
+  mountSelect,
+  mountSeparator,
+  mountTabs,
+  type TabItem,
+  type Tone,
+} from '@openchamber/sdk/ui';
 import { renderMarkdownInto } from './markdown';
 
 const host = connectHost();
@@ -79,7 +90,11 @@ let currentTab: string = 'observations';
 // context block several times over.
 let renderSeq = 0;
 
-const el = <K extends keyof HTMLElementTagNameMap>(tag: K, container: HTMLElement, className?: string): HTMLElementTagNameMap[K] => {
+const el = <K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  container: HTMLElement,
+  className?: string,
+): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
   if (className) node.className = className;
   container.append(node);
@@ -140,13 +155,18 @@ async function connect(): Promise<void> {
   try {
     const dir = directory ?? processDirectory();
     const revision = JSON.stringify(config);
-    const result = await callService<ConnectResult>('POST', '/v1/connect', { config, configRevision: revision, directory: dir });
+    const result = await callService<ConnectResult>('POST', '/v1/connect', {
+      config,
+      configRevision: revision,
+      directory: dir,
+    });
     setVersion(result.version);
     if (!result.ok) {
       setBadge(result.code === 'unsupported-engram' ? 'Unsupported Engram' : 'Failed', 'error');
-      statusNote.textContent = result.code === 'unsupported-engram'
-        ? `Engram ${result.version ?? 'unknown'} is below the supported floor ${result.required ?? '3.4.0'}.`
-        : `Connect failed: ${result.code ?? 'unknown'}`;
+      statusNote.textContent =
+        result.code === 'unsupported-engram'
+          ? `Engram ${result.version ?? 'unknown'} is below the supported floor ${result.required ?? '3.4.0'}.`
+          : `Connect failed: ${result.code ?? 'unknown'}`;
       renderSetup();
       return;
     }
@@ -177,13 +197,16 @@ async function connect(): Promise<void> {
 }
 
 async function fetchStats(): Promise<void> {
-  if (!state || !state.contextId) { stats = null; return; }
+  if (!state || !state.contextId) {
+    stats = null;
+    return;
+  }
   try {
     const result = await callService<{ ok: boolean; code?: string; stats?: ProjectStats }>('POST', '/v1/stats', {
       contextId: state.contextId,
       project: state.project || undefined,
     });
-    stats = result.ok ? result.stats ?? null : null;
+    stats = result.ok ? (result.stats ?? null) : null;
   } catch {
     stats = null;
   }
@@ -271,11 +294,15 @@ async function renderObservationsTab(container: HTMLElement): Promise<void> {
   if (!state) return;
   const seq = ++renderSeq;
   statusNote.textContent = '';
-  const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>('POST', '/v1/observations', {
-    contextId: state.contextId,
-    project: state.project || undefined,
-    limit,
-  });
+  const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>(
+    'POST',
+    '/v1/observations',
+    {
+      contextId: state.contextId,
+      project: state.project || undefined,
+      limit,
+    },
+  );
   if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Observations unavailable: ${result.code ?? 'unknown'}`;
@@ -375,11 +402,15 @@ async function renderPromptsTab(container: HTMLElement): Promise<void> {
   if (!state) return;
   const seq = ++renderSeq;
   statusNote.textContent = '';
-  const result = await callService<{ ok: boolean; code?: string; hits?: PromptHit[]; note?: string }>('POST', '/v1/prompts', {
-    contextId: state.contextId,
-    project: state.project || undefined,
-    limit,
-  });
+  const result = await callService<{ ok: boolean; code?: string; hits?: PromptHit[]; note?: string }>(
+    'POST',
+    '/v1/prompts',
+    {
+      contextId: state.contextId,
+      project: state.project || undefined,
+      limit,
+    },
+  );
   if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Prompts unavailable: ${result.code ?? 'unknown'}`;
@@ -415,7 +446,14 @@ function showPromptDetail(hit: PromptHit): void {
   renderSeq++;
   viewRoot.textContent = '';
   const back = el('div', viewRoot, 'actions');
-  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { goBack(); } });
+  mountButton(back, {
+    label: 'Back',
+    variant: 'ghost',
+    size: 'xs',
+    onClick: () => {
+      goBack();
+    },
+  });
   // Card: title = first line of content, badge, meta (Created, Project, Prompt #id, Session)
   const card = el('div', viewRoot, 'detail-card');
   const head = el('div', card, 'detail-head');
@@ -462,12 +500,28 @@ function showPromptDetail(hit: PromptHit): void {
   const body = el('div', section);
   renderMarkdownInto(body, hit.content, (url) => void host.openUrl(url));
   const actions = el('div', viewRoot, 'actions');
-  mountButton(actions, { label: 'Copy prompt', size: 'sm', onClick: () => { void host.writeClipboard(hit.content); setBadge('Copied', 'success'); setTimeout(() => setBadge('Ready', 'success'), 1500); } });
+  mountButton(actions, {
+    label: 'Copy prompt',
+    size: 'sm',
+    onClick: () => {
+      void host.writeClipboard(hit.content);
+      setBadge('Copied', 'success');
+      setTimeout(() => setBadge('Ready', 'success'), 1500);
+    },
+  });
   const detailState = state;
-  mountButton(actions, { label: 'Insert into chat', size: 'sm', variant: 'secondary', onClick: () => {
-    const text = `### ${hit.createdAt ?? `Prompt #${hit.id}`} (project: ${detailState?.project})\n${hit.content}`;
-    void host.compose({ text, mode: 'append' }).then(() => setBadge('Inserted', 'success')).catch(() => setBadge('Insert failed', 'error'));
-  } });
+  mountButton(actions, {
+    label: 'Insert into chat',
+    size: 'sm',
+    variant: 'secondary',
+    onClick: () => {
+      const text = `### ${hit.createdAt ?? `Prompt #${hit.id}`} (project: ${detailState?.project})\n${hit.content}`;
+      void host
+        .compose({ text, mode: 'append' })
+        .then(() => setBadge('Inserted', 'success'))
+        .catch(() => setBadge('Insert failed', 'error'));
+    },
+  });
 }
 
 async function showSessionDetail(sessionId: string): Promise<void> {
@@ -478,9 +532,22 @@ async function showSessionDetail(sessionId: string): Promise<void> {
   currentTab = 'sessions';
 
   const back = el('div', viewRoot, 'actions');
-  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { void goBack(); } });
+  mountButton(back, {
+    label: 'Back',
+    variant: 'ghost',
+    size: 'xs',
+    onClick: () => {
+      void goBack();
+    },
+  });
 
-  const result = await callService<{ ok: boolean; code?: string; session?: any; observations?: any[]; prompts?: any[] }>('POST', '/v1/sessionDetail', {
+  const result = await callService<{
+    ok: boolean;
+    code?: string;
+    session?: any;
+    observations?: any[];
+    prompts?: any[];
+  }>('POST', '/v1/sessionDetail', {
     contextId: state.contextId,
     project: state.project,
     sessionId,
@@ -554,7 +621,10 @@ async function showSessionDetail(sessionId: string): Promise<void> {
           leading: o.type,
           meta: o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '',
         })),
-        onSelect: (id) => { backTarget = { restore: 'session', sessionId }; void showDetail(Number(id)); },
+        onSelect: (id) => {
+          backTarget = { restore: 'session', sessionId };
+          void showDetail(Number(id));
+        },
       });
     } else {
       const note = el('p', section, 'note');
@@ -577,7 +647,10 @@ async function showSessionDetail(sessionId: string): Promise<void> {
         })),
         onSelect: (id) => {
           const p = result.prompts?.find((pp: any) => String(pp.id) === id);
-          if (p) { backTarget = { restore: 'session', sessionId }; void showPromptDetail(p); }
+          if (p) {
+            backTarget = { restore: 'session', sessionId };
+            void showPromptDetail(p);
+          }
         },
       });
     } else {
@@ -602,18 +675,28 @@ function goBack(): void {
 
 async function doSearch(): Promise<void> {
   if (!state) return;
-  if (state.projectStatus !== 'resolved') { renderProjectGate(); return; }
-  if (!query.trim()) { void renderRecent(); return; }
+  if (state.projectStatus !== 'resolved') {
+    renderProjectGate();
+    return;
+  }
+  if (!query.trim()) {
+    void renderRecent();
+    return;
+  }
   const seq = ++renderSeq;
   backTarget = { restore: 'list' };
   viewRoot.textContent = '';
-  const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>('POST', '/v1/search', {
-    contextId: state.contextId,
-    query,
-    broad,
-    limit,
-    project: state.project || undefined,
-  });
+  const result = await callService<{ ok: boolean; code?: string; hits?: SearchHit[]; note?: string }>(
+    'POST',
+    '/v1/search',
+    {
+      contextId: state.contextId,
+      query,
+      broad,
+      limit,
+      project: state.project || undefined,
+    },
+  );
   if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Search failed: ${result.code ?? 'unknown'}`;
@@ -648,8 +731,25 @@ async function showDetail(id: number): Promise<void> {
   const seq = ++renderSeq;
   viewRoot.textContent = '';
   const back = el('div', viewRoot, 'actions');
-  mountButton(back, { label: 'Back', variant: 'ghost', size: 'xs', onClick: () => { goBack(); } });
-  const result = await callService<{ ok: boolean; code?: string; title?: string; type?: string; createdAt?: string | null; sessionId?: string | null; scope?: string | null; topic?: string | null; markdown?: string }>('POST', '/v1/getMemory', { contextId: state.contextId, id, project: state.project || undefined });
+  mountButton(back, {
+    label: 'Back',
+    variant: 'ghost',
+    size: 'xs',
+    onClick: () => {
+      goBack();
+    },
+  });
+  const result = await callService<{
+    ok: boolean;
+    code?: string;
+    title?: string;
+    type?: string;
+    createdAt?: string | null;
+    sessionId?: string | null;
+    scope?: string | null;
+    topic?: string | null;
+    markdown?: string;
+  }>('POST', '/v1/getMemory', { contextId: state.contextId, id, project: state.project || undefined });
   if (seq !== renderSeq) return;
   if (!result.ok) {
     statusNote.textContent = `Detail failed: ${result.code ?? 'unknown'}`;
@@ -699,12 +799,28 @@ async function showDetail(id: number): Promise<void> {
   const body = el('div', section);
   renderMarkdownInto(body, result.markdown ?? '', (url) => void host.openUrl(url));
   const actions = el('div', viewRoot, 'actions');
-  mountButton(actions, { label: 'Copy Markdown', size: 'sm', onClick: () => { void host.writeClipboard(result.markdown ?? ''); setBadge('Copied', 'success'); setTimeout(() => setBadge('Ready', 'success'), 1500); } });
+  mountButton(actions, {
+    label: 'Copy Markdown',
+    size: 'sm',
+    onClick: () => {
+      void host.writeClipboard(result.markdown ?? '');
+      setBadge('Copied', 'success');
+      setTimeout(() => setBadge('Ready', 'success'), 1500);
+    },
+  });
   const detailState = state;
-  mountButton(actions, { label: 'Insert into chat', size: 'sm', variant: 'secondary', onClick: () => {
-    const text = `## ${result.title ?? `Memory #${id}`} (project: ${detailState?.project})\n${result.markdown ?? ''}`;
-    void host.compose({ text, mode: 'append' }).then(() => setBadge('Inserted', 'success')).catch(() => setBadge('Insert failed', 'error'));
-  } });
+  mountButton(actions, {
+    label: 'Insert into chat',
+    size: 'sm',
+    variant: 'secondary',
+    onClick: () => {
+      const text = `## ${result.title ?? `Memory #${id}`} (project: ${detailState?.project})\n${result.markdown ?? ''}`;
+      void host
+        .compose({ text, mode: 'append' })
+        .then(() => setBadge('Inserted', 'success'))
+        .catch(() => setBadge('Insert failed', 'error'));
+    },
+  });
 }
 
 function renderSetup(): void {
@@ -720,14 +836,22 @@ function renderSetup(): void {
 function projectLabel(source: string): string {
   switch (source) {
     case 'process_override':
-    case 'explicit_override': return 'explicit override';
-    case 'git_remote': return 'detected via git remote';
-    case 'dir_basename': return 'detected from directory name';
-    case 'session': return 'from session';
-    case 'ambiguous': return 'needs a choice';
-    case 'all_projects': return 'all projects';
-    case '': return 'undetected';
-    default: return source;
+    case 'explicit_override':
+      return 'explicit override';
+    case 'git_remote':
+      return 'detected via git remote';
+    case 'dir_basename':
+      return 'detected from directory name';
+    case 'session':
+      return 'from session';
+    case 'ambiguous':
+      return 'needs a choice';
+    case 'all_projects':
+      return 'all projects';
+    case '':
+      return 'undetected';
+    default:
+      return source;
   }
 }
 
@@ -745,8 +869,9 @@ function renderProjectGate(): void {
   const heading = el('h3', viewRoot);
   heading.textContent = state.projectStatus === 'ambiguous' ? 'Choose a project' : 'Project not detected';
   const note = el('p', viewRoot, 'note');
-  note.textContent = state.errorHint
-    || (state.projectStatus === 'ambiguous'
+  note.textContent =
+    state.errorHint ||
+    (state.projectStatus === 'ambiguous'
       ? 'Engram matched more than one project for this workspace. Pick the one to browse.'
       : 'Engram could not detect a project for this workspace. Pick one to browse.');
   if (state.projectPath) {
@@ -766,7 +891,9 @@ function renderProjectGate(): void {
     placeholder: 'Select a project…',
     searchable: candidates.length > 8,
     options: candidates.map((name) => ({ id: name, label: name })),
-    onChange: (id) => { chosen = id; },
+    onChange: (id) => {
+      chosen = id;
+    },
   });
   mountButton(row, {
     label: 'Use project',
@@ -792,26 +919,40 @@ const searchFieldWrap = el('label', toolbarMain, 'oc-sdk oc-sdk-field');
 const searchCaption = el('span', searchFieldWrap, 'oc-sdk-field-label');
 searchCaption.textContent = 'Search memories';
 const searchField = mountSearchField(searchFieldWrap, {
-  value: '', placeholder: 'Search memories…', label: 'Search memories',
-  autofocus: false, onChange: (value) => { query = value; void doSearch(); },
+  value: '',
+  placeholder: 'Search memories…',
+  label: 'Search memories',
+  autofocus: false,
+  onChange: (value) => {
+    query = value;
+    void doSearch();
+  },
 });
 
 const modeSelect = mountSelect(toolbarMain, {
-  label: 'Match', value: broad ? 'any' : 'all',
+  label: 'Match',
+  value: broad ? 'any' : 'all',
   options: [
     { id: 'any', label: 'Broader', hint: 'Any keyword matches' },
     { id: 'all', label: 'Strict', hint: 'Every keyword matches' },
   ],
-  onChange: (value) => { broad = value === 'any'; void doSearch(); },
+  onChange: (value) => {
+    broad = value === 'any';
+    void doSearch();
+  },
 });
 
 const limitSelect = mountSelect(toolbarMain, {
-  label: 'Limit', value: String(limit),
+  label: 'Limit',
+  value: String(limit),
   options: [
     { id: '10', label: '10' },
     { id: '20', label: '20' },
   ],
-  onChange: (value) => { limit = Number(value); void doSearch(); },
+  onChange: (value) => {
+    limit = Number(value);
+    void doSearch();
+  },
 });
 
 const titleStatus = el('div', titleCol, 'title-status');
@@ -820,10 +961,15 @@ const setBadge = (label: string, tone: Tone): void => badge.update({ label, tone
 
 host.onReady((context) => {
   applyHostReady(context, document.documentElement);
-  void host.storage.get(STORAGE_KEY).then((stored) => {
-    if (stored && typeof stored === 'object') config = stored as Config;
-  }).finally(() => { void connect(); });
-  context.directory !== undefined && (directory = context.directory ?? null);
+  void host.storage
+    .get(STORAGE_KEY)
+    .then((stored) => {
+      if (stored && typeof stored === 'object') config = stored as Config;
+    })
+    .finally(() => {
+      void connect();
+    });
+  if (context.directory !== undefined) directory = context.directory ?? null;
 
   // Mobile/Phone support: log device info and adjust layout if needed
   // `ready.device` is available in OpenChamber >= 2.7.1

@@ -10,6 +10,7 @@
     "bundle": "bun run bundle:panel && bun run bundle:service"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
     "@openchamber/sdk": "^2.7.2",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.6.2",
