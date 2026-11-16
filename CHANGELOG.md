@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file, in reverse chronological order by release.
 
+## 0.4.0
+
+### Added
+
+- [#5](https://github.com/bitExpert/openchamber-engram-plugin/pull/5) Enable Mobile view
+
+### Deprecated
+
+- Nothing.
+
+### Removed
+
+- Nothing.
+
+### Fixed
+
+- Nothing.
+
 ## 0.3.1
 
 ### Added
