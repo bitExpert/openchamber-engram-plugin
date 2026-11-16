@@ -53,6 +53,12 @@
       .count-label { font-size: 0.75rem; line-height: 1.45; color: var(--surface-muted-foreground, gray); }
       .section { margin-top: 20px; }
       .section-heading { margin: 0 0 8px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--surface-muted-foreground, gray); }
+
+      /* Mobile/phone: optimize the 360–390px narrow layout */
+      @media (max-width: 390px) {
+        .stats-grid { grid-template-columns: 1fr; gap: 6px; }
+        .detail-meta { grid-template-columns: 1fr; gap: 4px 10px; }
+      }
     </style>
   </head>
   <body>
