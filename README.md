@@ -46,6 +46,27 @@ bun run bundle          # both
 - After rebuilding the **service**, restart it by pausing and re-enabling the guest (Settings → Extensions, or `PUT /api/guests/engram-memory/enabled`).
 - The **panel** script is served statically by the host, so a browser reload picks up a new bundle without a service restart.
 
+## Quality checks
+
+CI runs on every pull request and on pushes to `master`:
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck   # tsc --noEmit
+bun run lint        # Biome (format + lint)
+bun run check       # openchamber-guest-check packaging validation
+bun run bundle      # rebuild panel/main.js and service/main.js
+git diff --exit-code -- panel/main.js service/main.js   # committed bundles must match source
+```
+
+Run the same suite locally before pushing:
+
+```bash
+bun run verify
+```
+
+The built `panel/main.js` and `service/main.js` are committed (OpenChamber never compiles your code), so `verify` fails when a change to `*.ts` was not rebuilt. Formatting and linting are handled by [Biome](https://biomejs.dev) — run `bun run format` to apply the formatter.
+
 ## Configuration
 
 Guest storage key `config/v1` (set from the extension settings or panel setup screen):
