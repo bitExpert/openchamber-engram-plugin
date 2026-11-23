@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "openchamber-engram",
@@ -9,7 +10,7 @@
       },
       "devDependencies": {
         "@biomejs/biome": "^2.6.8",
-        "@openchamber/sdk": "^2.7.2",
+        "@openchamber/sdk": "^2.7.3",
         "@types/bun": "^1.4.4",
         "@types/jsdom": "^30.0.0",
         "@types/markdown-it": "^14.2.0",
@@ -44,7 +45,7 @@
 
     "@exodus/bytes": ["@exodus/bytes@1.16.0", "", { "peerDependencies": { "@noble/hashes": "^1.8.0 || ^2.0.0" }, "optionalPeers": ["@noble/hashes"] }, "sha512-IcpW84uEn3N7ETtNZMlxKhfl6Pec8rUNGOTBtWbK1FKhJxIFAptZyVrvVRVBimAJxJCgc3PxepxkdWWG4DVzfA=="],
 
-    "@openchamber/sdk": ["@openchamber/sdk@2.7.2", "", { "dependencies": { "zod": "^4.3.6" }, "bin": { "openchamber-guest-check": "scripts/check-guest.ts", "openchamber-guest-bundle": "scripts/bundle-guest.ts" } }, "sha512-kX1YjaSywIXYuHPJIcMMnwfTG35PeI1FVO9g853denAeBCj5sl1Wda8YfIxM0Lv+bfqFrEiZ4NXifIuNVWxTRA=="],
+    "@openchamber/sdk": ["@openchamber/sdk@2.7.3", "", { "dependencies": { "zod": "^4.3.6" }, "bin": { "openchamber-guest-check": "scripts/check-guest.ts", "openchamber-guest-bundle": "scripts/bundle-guest.ts" } }, "sha512-SLsmUY+lDYQ44V8oHJlObWY3yHtJhfW6mtwMBqKKoD3dHDxIgBjR24Ts1tXNo1RDS6RFkW2yJgkQf3J6smvTyA=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
