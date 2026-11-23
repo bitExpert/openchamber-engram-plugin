@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
-    "@openchamber/sdk": "^2.7.2",
+    "@openchamber/sdk": "^2.7.3",
     "@types/bun": "^1.4.4",
     "@types/jsdom": "^30.0.0",
     "@types/markdown-it": "^14.2.0",
